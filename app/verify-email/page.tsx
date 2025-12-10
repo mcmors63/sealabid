@@ -1,12 +1,12 @@
 // app/verify-email/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { account } from "@/lib/appwriteClient";
 
-export default function VerifyEmailPage() {
+function VerifyEmailContent() {
   const searchParams = useSearchParams();
   const userId = searchParams.get("userId");
   const secret = searchParams.get("secret");
@@ -172,3 +172,25 @@ export default function VerifyEmailPage() {
     </main>
   );
 }
+
+export default function VerifyEmailPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-slate-950 text-slate-50">
+          <div className="mx-auto max-w-md px-4 py-10 sm:py-14">
+            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+              Verify your <span className="text-emerald-400">email</span>
+            </h1>
+            <p className="mt-3 text-sm text-slate-300">
+              Loading your verification details…
+            </p>
+          </div>
+        </main>
+      }
+    >
+      <VerifyEmailContent />
+    </Suspense>
+  );
+}
+
