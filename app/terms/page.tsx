@@ -111,14 +111,14 @@ export default function TermsPage() {
               </li>
               <li>
                 Sellers have a limited decision window (currently intended to be{" "}
-                <span className="font-semibold">15 minutes</span>) after an
-                auction ends to open bids and select a winner.
+                <span className="font-semibold">2 hours</span>) after an auction
+                ends to open bids and select a winner.
               </li>
               <li>
                 If the seller does not choose any bid within that window, the
                 listing may be treated as{" "}
-                <span className="font-semibold">no sale</span>, and the listing
-                fee may not be refunded.
+                <span className="font-semibold">no sale</span>, the listing fee
+                may not be refunded, and bids may be treated as expired.
               </li>
             </ul>
           </section>
