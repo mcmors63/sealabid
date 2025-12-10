@@ -10,31 +10,30 @@ const DB_ID = "sealabid_main_db";
 const LISTINGS_COLLECTION_ID = "listings";
 const BIDS_COLLECTION_ID = "bids";
 
-type UserSummary = {
+type SimpleUser = {
   id: string;
   name: string;
   email: string;
-  emailVerified: boolean;
+  emailVerified: boolean | null;
   accountType?: string;
   profileBio?: string;
 };
 
-type Listing = {
+type ListingSummary = {
   $id: string;
   title: string;
-  durationDays: number;
   endsAt: string;
   status: string;
-  bidsCount?: number;
+  bidsCount: number;
   category?: string;
 };
 
-type Bid = {
+type BidSummary = {
   $id: string;
   listingId: string;
+  listingTitle: string;
   amount: number;
   createdAt: string;
-  listingTitle?: string;
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -58,7 +57,7 @@ function timeStatus(endsAt: string) {
   }
 
   if (diff <= 0) {
-    return { label: "Auction ended", ended: true };
+    return { label: "Ended", ended: true };
   }
 
   const minutes = Math.floor(diff / (1000 * 60));
@@ -73,212 +72,188 @@ function timeStatus(endsAt: string) {
 }
 
 export default function DashboardPage() {
-  const [user, setUser] = useState<UserSummary | null>(null);
+  const [user, setUser] = useState<SimpleUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
-  const [userError, setUserError] = useState<string | null>(null);
 
-  const [listings, setListings] = useState<Listing[]>([]);
+  const [listings, setListings] = useState<ListingSummary[]>([]);
   const [loadingListings, setLoadingListings] = useState(false);
   const [listingsError, setListingsError] = useState<string | null>(null);
 
-  const [bids, setBids] = useState<Bid[]>([]);
+  const [bids, setBids] = useState<BidSummary[]>([]);
   const [loadingBids, setLoadingBids] = useState(false);
   const [bidsError, setBidsError] = useState<string | null>(null);
 
-  // 1) Load user
   useEffect(() => {
     let cancelled = false;
 
-    async function loadUser() {
+    async function loadDashboard() {
       try {
+        setLoadingUser(true);
+        setListingsError(null);
+        setBidsError(null);
+
+        // 1) Load account
         const me: any = await account.get();
         if (cancelled) return;
 
         const prefs = me.prefs || {};
-        const summary: UserSummary = {
+
+        const simple: SimpleUser = {
           id: me.$id,
           name: me.name || "",
-          email: me.email,
+          email: me.email || "",
+          // @ts-ignore
           emailVerified: Boolean(me.emailVerification),
           accountType: prefs.accountType,
           profileBio: prefs.profileBio,
         };
 
-        setUser(summary);
-      } catch (err: any) {
+        setUser(simple);
+        setLoadingUser(false);
+
+        // 2) Load user's own listings (latest first, limit 5)
+        setLoadingListings(true);
+        try {
+          const res = await databases.listDocuments(
+            DB_ID,
+            LISTINGS_COLLECTION_ID,
+            [
+              Query.equal("sellerId", simple.id),
+              Query.orderDesc("endsAt"),
+              Query.limit(5),
+            ]
+          );
+          if (!cancelled) {
+            const docs = res.documents as any[];
+            const mapped: ListingSummary[] = docs.map((doc) => ({
+              $id: doc.$id,
+              title: doc.title,
+              endsAt: doc.endsAt,
+              status: doc.status,
+              bidsCount:
+                typeof doc.bidsCount === "number" ? doc.bidsCount : 0,
+              category: doc.category,
+            }));
+            setListings(mapped);
+          }
+        } catch (err: any) {
+          console.error(err);
+          if (!cancelled) {
+            const msg =
+              err?.message ||
+              err?.response?.message ||
+              "Failed to load your listings.";
+            setListingsError(msg);
+          }
+        } finally {
+          if (!cancelled) setLoadingListings(false);
+        }
+
+        // 3) Load user's recent bids (limit 5, most recent first)
+        setLoadingBids(true);
+        try {
+          const res = await databases.listDocuments(
+            DB_ID,
+            BIDS_COLLECTION_ID,
+            [
+              Query.equal("bidderId", simple.id),
+              Query.orderDesc("$createdAt"),
+              Query.limit(5),
+            ]
+          );
+          if (!cancelled) {
+            const docs = res.documents as any[];
+            const mapped: BidSummary[] = docs.map((doc) => ({
+              $id: doc.$id,
+              listingId: doc.listingId,
+              listingTitle: doc.listingTitle || "(Listing)",
+              amount: doc.amount,
+              createdAt: doc.$createdAt,
+            }));
+            setBids(mapped);
+          }
+        } catch (err: any) {
+          console.error(err);
+          if (!cancelled) {
+            const msg =
+              err?.message ||
+              err?.response?.message ||
+              "Failed to load your recent bids.";
+            setBidsError(msg);
+          }
+        } finally {
+          if (!cancelled) setLoadingBids(false);
+        }
+      } catch (err) {
         console.error(err);
         if (!cancelled) {
           setUser(null);
-          setUserError(
-            err?.message ||
-              err?.response?.message ||
-              "Failed to load your account."
-          );
+          setLoadingUser(false);
         }
-      } finally {
-        if (!cancelled) setLoadingUser(false);
       }
     }
 
-    loadUser();
+    loadDashboard();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // 2) Load listings (selling) for this user
-  useEffect(() => {
-    if (!user?.id) return;
-
-    let cancelled = false;
-
-    async function loadListings() {
-      try {
-        setListingsError(null);
-        setLoadingListings(true);
-
-        const res = await databases.listDocuments(
-          DB_ID,
-          LISTINGS_COLLECTION_ID,
-          [Query.equal("sellerId", user.id), Query.orderDesc("endsAt")]
-        );
-
-        if (cancelled) return;
-
-        const docs = res.documents as any[];
-        const mapped: Listing[] = docs.map((doc) => ({
-          $id: doc.$id,
-          title: doc.title,
-          durationDays: doc.durationDays,
-          endsAt: doc.endsAt,
-          status: doc.status,
-          bidsCount: typeof doc.bidsCount === "number" ? doc.bidsCount : 0,
-          category: doc.category,
-        }));
-
-        setListings(mapped);
-      } catch (err: any) {
-        console.error(err);
-        if (!cancelled) {
-          setListingsError(
-            err?.message ||
-              err?.response?.message ||
-              "Failed to load your listings."
-          );
-        }
-      } finally {
-        if (!cancelled) setLoadingListings(false);
-      }
-    }
-
-    loadListings();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
-
-  // 3) Load bids (buying) for this user
-  useEffect(() => {
-    if (!user?.id) return;
-
-    let cancelled = false;
-
-    async function loadBids() {
-      try {
-        setBidsError(null);
-        setLoadingBids(true);
-
-        const res = await databases.listDocuments(
-          DB_ID,
-          BIDS_COLLECTION_ID,
-          [Query.equal("bidderId", user.id), Query.orderDesc("$createdAt")]
-        );
-
-        if (cancelled) return;
-
-        const docs = res.documents as any[];
-        const baseBids: Bid[] = docs.map((doc) => ({
-          $id: doc.$id,
-          listingId: doc.listingId,
-          amount: doc.amount,
-          createdAt: doc.$createdAt,
-        }));
-
-        // Fetch titles for listings you’ve bid on
-        const uniqueListingIds = Array.from(
-          new Set(baseBids.map((b) => b.listingId).filter(Boolean))
-        );
-
-        const titles: Record<string, string> = {};
-
-        await Promise.all(
-          uniqueListingIds.map(async (listingId) => {
-            try {
-              const doc: any = await databases.getDocument(
-                DB_ID,
-                LISTINGS_COLLECTION_ID,
-                listingId
-              );
-              titles[listingId] = doc.title;
-            } catch (err) {
-              console.error("Failed to load listing for bid", listingId, err);
-            }
-          })
-        );
-
-        const enriched = baseBids.map((b) => ({
-          ...b,
-          listingTitle: titles[b.listingId] || "Listing",
-        }));
-
-        setBids(enriched);
-      } catch (err: any) {
-        console.error(err);
-        if (!cancelled) {
-          setBidsError(
-            err?.message ||
-              err?.response?.message ||
-              "Failed to load your bids."
-          );
-        }
-      } finally {
-        if (!cancelled) setLoadingBids(false);
-      }
-    }
-
-    loadBids();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
-
-  // If user not logged in
+  // -----------------------------
+  // Not logged in
+  // -----------------------------
   if (!loadingUser && !user) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50">
-        <div className="mx-auto max-w-4xl px-4 py-10 sm:py-14 space-y-4">
+        <div className="mx-auto max-w-3xl px-4 py-10 sm:py-14 space-y-4">
           <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
             Your dashboard
           </h1>
           <p className="text-sm text-slate-300">
-            You need to be logged in to view your dashboard.
+            You need to be logged in to see your dashboard.
           </p>
-          <Link
-            href="/login"
-            className="inline-flex rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
-          >
-            Log in
-          </Link>
+          <div className="flex flex-wrap gap-3 text-xs">
+            <Link
+              href="/login"
+              className="inline-flex rounded-full bg-emerald-500 px-4 py-2 font-semibold text-slate-950 hover:bg-emerald-400"
+            >
+              Login
+            </Link>
+            <Link
+              href="/register"
+              className="inline-flex rounded-full border border-slate-600 px-4 py-2 font-semibold text-slate-100 hover:border-emerald-400 hover:text-emerald-300"
+            >
+              Register
+            </Link>
+          </div>
         </div>
       </main>
     );
   }
 
+  if (loadingUser) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50">
+        <div className="mx-auto max-w-3xl px-4 py-10 sm:py-14">
+          <p className="text-sm text-slate-300">Loading your dashboard…</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!user) {
+    // just in case
+    return null;
+  }
+
+  const activeListings = listings.filter((l) => l.status === "active");
+  const endedListings = listings.filter((l) => l.status !== "active");
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       <div className="mx-auto max-w-5xl px-4 py-10 sm:py-14 space-y-6">
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-4">
+        {/* HEADER */}
+        <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-300">
               Sealabid
@@ -287,240 +262,269 @@ export default function DashboardPage() {
               Your dashboard
             </h1>
             <p className="mt-2 text-sm text-slate-300">
-              Manage your profile, see what you&apos;re selling and what you&apos;ve
-              bid on. Everyone registers to buy or sell – this is your control
-              centre.
+              A quick overview of your profile, items you&apos;ve listed, and
+              where you&apos;ve placed sealed bids.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/sell"
-              className="rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-md shadow-emerald-500/30 hover:bg-emerald-400"
-            >
-              Sell an item
-            </Link>
-            <Link
-              href="/listings"
-              className="rounded-full border border-slate-600 px-4 py-2 text-xs font-semibold text-slate-200 hover:border-emerald-400 hover:text-emerald-300"
-            >
-              Browse items
-            </Link>
-          </div>
+          <Link
+            href="/sell"
+            className="inline-flex rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-md shadow-emerald-500/30 hover:bg-emerald-400"
+          >
+            Sell an item
+          </Link>
         </div>
 
-        {/* Profile card */}
-        <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-5">
-          <h2 className="text-sm font-semibold text-slate-50">
-            Your profile
-          </h2>
-
-          {loadingUser ? (
-            <p className="mt-2 text-sm text-slate-300">Loading profile…</p>
-          ) : userError ? (
-            <p className="mt-2 text-sm text-red-300">{userError}</p>
-          ) : user ? (
-            <div className="mt-3 grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1 text-sm text-slate-200">
-                <p>
-                  <span className="text-slate-400 text-xs uppercase tracking-wide">
-                    Name:
-                  </span>{" "}
-                  {user.name || "Not set"}
-                </p>
-                <p>
-                  <span className="text-slate-400 text-xs uppercase tracking-wide">
-                    Email:
-                  </span>{" "}
-                  {user.email}
-                </p>
-                <p>
-                  <span className="text-slate-400 text-xs uppercase tracking-wide">
-                    Email status:
-                  </span>{" "}
-                  {user.emailVerified ? (
-                    <span className="text-emerald-300 font-medium">
-                      Verified
-                    </span>
-                  ) : (
-                    <span className="text-amber-300 font-medium">
-                      Not verified
-                    </span>
-                  )}
-                </p>
-                <p>
-                  <span className="text-slate-400 text-xs uppercase tracking-wide">
-                    Account type:
-                  </span>{" "}
-                  {user.accountType
-                    ? user.accountType.charAt(0).toUpperCase() +
-                      user.accountType.slice(1)
-                    : "Not set"}
-                </p>
-              </div>
-              <div className="space-y-2 text-sm text-slate-200">
-                <p className="text-slate-400 text-xs uppercase tracking-wide">
-                  Profile bio
-                </p>
-                <p className="text-sm text-slate-200 whitespace-pre-wrap">
-                  {user.profileBio || "You haven’t added a bio yet."}
-                </p>
-                <p className="text-[11px] text-slate-400">
-                  Your profile helps sellers choose a buyer when price isn&apos;t the
-                  only factor – especially for charities or causes.
-                </p>
-              </div>
+        {/* TOP GRID: PROFILE + QUICK LINKS */}
+        <section className="grid gap-4 md:grid-cols-[3fr,2fr]">
+          {/* Profile summary */}
+          <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-5 text-sm">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+              Profile
+            </h2>
+            <p className="mt-2 text-sm font-semibold text-slate-50">
+              {user.name || "(No name yet)"}
+            </p>
+            <p className="text-xs text-slate-400">{user.email}</p>
+            <p className="mt-1 text-[11px] text-slate-400">
+              Account type:{" "}
+              <span className="font-medium text-slate-200">
+                {user.accountType || "Not set"}
+              </span>
+            </p>
+            <p className="mt-1 text-[11px] text-slate-400">
+              Email status:{" "}
+              {user.emailVerified ? (
+                <span className="font-semibold text-emerald-300">
+                  Verified
+                </span>
+              ) : (
+                <span className="font-semibold text-amber-300">
+                  Not verified
+                </span>
+              )}
+            </p>
+            {user.profileBio && (
+              <p className="mt-3 line-clamp-3 text-xs text-slate-300">
+                {user.profileBio}
+              </p>
+            )}
+            <div className="mt-4 flex flex-wrap gap-2 text-xs">
+              <Link
+                href="/profile"
+                className="inline-flex rounded-full border border-slate-600 px-3 py-1.5 font-semibold text-slate-100 hover:border-emerald-400 hover:text-emerald-300"
+              >
+                Edit profile details
+              </Link>
             </div>
-          ) : null}
+          </div>
 
-          <div className="mt-4 flex flex-wrap gap-2 text-xs">
-            <Link
-              href="/profile"
-              className="rounded-full border border-slate-600 px-3 py-1.5 font-semibold text-slate-200 hover:border-emerald-400 hover:text-emerald-300"
-            >
-              Edit profile details
-            </Link>
-            <button
-              type="button"
-              disabled
-              className="rounded-full border border-slate-700 px-3 py-1.5 font-semibold text-slate-500"
-            >
-              Manage payment methods (coming soon)
-            </button>
+          {/* Quick links */}
+          <div className="space-y-3 rounded-3xl border border-slate-800 bg-slate-900/70 p-5 text-sm">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+              Shortcuts
+            </h2>
+            <ul className="mt-2 space-y-2 text-xs text-slate-300">
+              <li>
+                <Link
+                  href="/sell"
+                  className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
+                >
+                  List a new item with sealed bids
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/my-listings"
+                  className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
+                >
+                  View all your listings
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/listings"
+                  className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
+                >
+                  Browse current listings
+                </Link>
+              </li>
+            </ul>
+            <p className="mt-3 text-[11px] text-slate-500">
+              Later we&apos;ll add payment methods, feedback, and more tools
+              here.
+            </p>
           </div>
         </section>
 
-        {/* Selling + Buying columns */}
-        <div className="grid gap-5 md:grid-cols-2">
-          {/* Selling */}
-          <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-5">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-slate-50">
-                Selling
-              </h2>
-              <Link
-                href="/my-listings"
-                className="text-[11px] font-semibold text-emerald-300 hover:text-emerald-200"
-              >
-                View all listings →
-              </Link>
-            </div>
-
-            {loadingListings ? (
-              <p className="mt-2 text-sm text-slate-300">Loading listings…</p>
-            ) : listingsError ? (
-              <p className="mt-2 text-sm text-red-300">{listingsError}</p>
-            ) : listings.length === 0 ? (
-              <p className="mt-2 text-sm text-slate-300">
-                You haven&apos;t listed anything yet.
-              </p>
-            ) : (
-              <>
-                <div className="mt-3 space-y-2">
-                  {listings.slice(0, 5).map((l) => {
-                    const t = timeStatus(l.endsAt);
-                    const bids = l.bidsCount || 0;
-                    const categoryKey =
-                      (l.category as keyof typeof CATEGORY_LABELS) || "other";
-                    const categoryLabel =
-                      CATEGORY_LABELS[categoryKey] || "Other";
-
-                    return (
-                      <Link
-                        key={l.$id}
-                        href={`/listings/${l.$id}`}
-                        className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-sm hover:border-emerald-500/60 hover:bg-slate-950"
-                      >
-                        <div className="space-y-1">
-                          <p className="font-semibold text-slate-50 line-clamp-1">
-                            {l.title}
-                          </p>
-                          <p className="text-[11px] text-slate-400">
-                            {categoryLabel} • {t.label}
-                          </p>
-                        </div>
-                        <div className="text-right text-[11px] text-slate-400">
-                          <p className="font-semibold text-emerald-300">
-                            {bids} envelope{bids === 1 ? "" : "s"}
-                          </p>
-                        </div>
-                      </Link>
-                    );
-                  })}
-                </div>
-                {listings.length > 5 && (
-                  <p className="mt-2 text-[11px] text-slate-400">
-                    Showing 5 of {listings.length} listings.
-                  </p>
-                )}
-              </>
-            )}
-          </section>
-
-          {/* Buying */}
-          <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-5">
+        {/* SELLING SECTION */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-slate-50">
-              Buying (your sealed bids)
+              Your recent listings
             </h2>
+            <Link
+              href="/my-listings"
+              className="text-xs font-semibold text-emerald-300 hover:text-emerald-200"
+            >
+              View all →
+            </Link>
+          </div>
 
-            {loadingBids ? (
-              <p className="mt-2 text-sm text-slate-300">Loading your bids…</p>
-            ) : bidsError ? (
-              <p className="mt-2 text-sm text-red-300">{bidsError}</p>
-            ) : bids.length === 0 ? (
-              <p className="mt-2 text-sm text-slate-300">
-                You haven&apos;t placed any sealed bids yet.
-              </p>
-            ) : (
-              <>
-                <div className="mt-3 space-y-2">
-                  {bids.slice(0, 5).map((b) => {
-                    const created = new Date(b.createdAt);
-                    const createdLabel = created.toLocaleString("en-GB", {
-                      dateStyle: "short",
-                      timeStyle: "short",
-                    });
+          {loadingListings && (
+            <p className="text-xs text-slate-400">Loading your listings…</p>
+          )}
 
-                    return (
-                      <div
-                        key={b.$id}
-                        className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-sm"
-                      >
-                        <div className="space-y-1">
-                          <p className="font-semibold text-slate-50 line-clamp-1">
-                            {b.listingTitle || "Listing"}
-                          </p>
-                          <p className="text-[11px] text-slate-400">
-                            Placed: {createdLabel}
-                          </p>
-                        </div>
-                        <div className="text-right text-[11px] text-slate-400">
-                          <p className="font-semibold text-slate-200">
-                            £{b.amount.toLocaleString("en-GB")}
-                          </p>
-                          <p className="text-[10px] text-slate-500">
-                            Result decided by seller
-                          </p>
+          {listingsError && (
+            <div className="rounded-md border border-red-500/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+              {listingsError}
+            </div>
+          )}
+
+          {!loadingListings && !listingsError && listings.length === 0 && (
+            <p className="text-xs text-slate-400">
+              You haven&apos;t listed anything yet.{" "}
+              <Link
+                href="/sell"
+                className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
+              >
+                Sell your first item
+              </Link>
+              .
+            </p>
+          )}
+
+          {listings.length > 0 && (
+            <div className="grid gap-3 md:grid-cols-2">
+              {listings.map((l) => {
+                const t = timeStatus(l.endsAt);
+                const bidsCount = l.bidsCount || 0;
+                const categoryKey =
+                  (l.category as keyof typeof CATEGORY_LABELS) || "other";
+                const categoryLabel = CATEGORY_LABELS[categoryKey] || "Other";
+
+                return (
+                  <Link
+                    key={l.$id}
+                    href={`/listings/${l.$id}`}
+                    className="flex flex-col justify-between rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-3 text-sm hover:border-emerald-500/60 hover:bg-slate-900"
+                  >
+                    <div className="space-y-1">
+                      <p className="font-semibold text-slate-50">
+                        {l.title}
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        {categoryLabel} • {t.label}
+                      </p>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+                      <p>
+                        Status:{" "}
+                        <span className="font-semibold text-slate-200">
+                          {l.status === "active" ? "Active" : "Ended"}
+                        </span>
+                      </p>
+                      <div className="flex items-center gap-1">
+                        <span className="font-semibold text-emerald-300">
+                          {bidsCount} envelope{bidsCount === 1 ? "" : "s"}
+                        </span>
+                        <div className="flex gap-1">
+                          {Array.from({
+                            length: Math.min(bidsCount, 4),
+                          }).map((_, i) => (
+                            <div
+                              key={i}
+                              className="flex h-4 w-6 items-center justify-center rounded-md border border-amber-400/60 bg-amber-500/10 text-[9px]"
+                            >
+                              ✉️
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-                {bids.length > 5 && (
-                  <p className="mt-2 text-[11px] text-slate-400">
-                    Showing 5 of {bids.length} bids. A full bids history page can
-                    come later.
-                  </p>
-                )}
-              </>
-            )}
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
 
-            <p className="mt-3 text-[11px] text-slate-500">
-              Remember: you never see other people&apos;s amounts and you may not
-              win, even with a strong bid. Sellers choose based on both price and
-              profile.
+          {endedListings.length > 0 && (
+            <p className="text-[11px] text-slate-500">
+              Ended listings will later get a dedicated view where you can open
+              envelopes, pick a buyer, or mark as no sale.
             </p>
-          </section>
-        </div>
+          )}
+        </section>
+
+        {/* BUYING SECTION */}
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-slate-50">
+            Your recent sealed bids
+          </h2>
+
+          {loadingBids && (
+            <p className="text-xs text-slate-400">Loading your bids…</p>
+          )}
+
+          {bidsError && (
+            <div className="rounded-md border border-red-500/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+              {bidsError}
+            </div>
+          )}
+
+          {!loadingBids && !bidsError && bids.length === 0 && (
+            <p className="text-xs text-slate-400">
+              You haven&apos;t placed any sealed bids yet.{" "}
+              <Link
+                href="/listings"
+                className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
+              >
+                Browse current listings
+              </Link>{" "}
+              to get started.
+            </p>
+          )}
+
+          {bids.length > 0 && (
+            <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-xs text-slate-300">
+              {bids.map((b) => (
+                <div
+                  key={b.$id}
+                  className="flex items-center justify-between gap-3 border-b border-slate-800/70 pb-2 last:border-b-0 last:pb-0"
+                >
+                  <div className="space-y-1">
+                    <Link
+                      href={`/listings/${b.listingId}`}
+                      className="font-semibold text-slate-50 hover:text-emerald-300"
+                    >
+                      {b.listingTitle}
+                    </Link>
+                    <p className="text-[11px] text-slate-400">
+                      Your sealed bid:{" "}
+                      <span className="font-semibold text-emerald-300">
+                        £{b.amount.toLocaleString("en-GB")}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="text-right text-[10px] text-slate-500">
+                    <p>
+                      Placed:{" "}
+                      {new Date(b.createdAt).toLocaleString("en-GB", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="text-[11px] text-slate-500">
+            When a listing you&apos;ve bid on ends, the seller has 2 hours to
+            open envelopes and choose a buyer. You&apos;ll be notified if
+            you&apos;re selected as the winner once payments are wired up.
+          </p>
+        </section>
       </div>
     </main>
   );
