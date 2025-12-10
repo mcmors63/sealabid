@@ -66,8 +66,8 @@ export default function RegisterPage() {
       // 1) Create user
       await account.create(ID.unique(), cleanEmail, password, cleanName);
 
-      // 2) Create email session so we can set prefs + send verification
-      await account.createEmailSession(cleanEmail, password);
+      // 2) Create email/password session so we can set prefs + send verification
+      await account.createEmailPasswordSession(cleanEmail, password);
 
       // 3) Save basic profile in preferences (no extra database needed yet)
       await account.updatePrefs({
