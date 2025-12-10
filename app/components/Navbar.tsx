@@ -10,6 +10,7 @@ const navLinks = [
   { href: "/", label: "Home" },
   { href: "/listings", label: "Browse" },
   { href: "/sell", label: "Sell an item" },
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/terms", label: "Terms" },
   { href: "/privacy", label: "Privacy" },
 ];
@@ -110,12 +111,6 @@ export default function Navbar() {
                     {user.name || user.email}
                   </span>
                 </span>
-                <Link
-                  href="/profile"
-                  className="rounded-full border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-emerald-400 hover:text-emerald-300 transition"
-                >
-                  My profile
-                </Link>
                 <button
                   onClick={handleLogout}
                   className="rounded-full border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-emerald-400 hover:text-emerald-300 transition"

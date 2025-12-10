@@ -1,16 +1,12 @@
 // app/layout.tsx
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
-import Navbar from "./components/Navbar";
-
-
-const inter = Inter({ subsets: ["latin"] });
+import Navbar from "./components/Navbar"; // or "@/components/Navbar" if you prefer
 
 export const metadata: Metadata = {
-  title: "Sealabid – Buying is Subjective",
+  title: "Sealabid – Buying is subjective",
   description:
-    "A sealed-bid marketplace where sellers choose the buyer, not just the highest price.",
+    "Sealabid is a sealed-bid marketplace where sellers choose buyers based on price and profile – not just who clicked fastest.",
 };
 
 export default function RootLayout({
@@ -20,11 +16,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <div className="min-h-screen bg-slate-950 text-slate-50">
-          <Navbar />
-          <div className="pt-2">{children}</div>
-        </div>
+      <body className="bg-slate-950 text-slate-50">
+        {/* This will appear on EVERY page */}
+        <Navbar />
+
+        {/* Page content */}
+        {children}
       </body>
     </html>
   );

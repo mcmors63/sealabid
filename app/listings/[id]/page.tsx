@@ -4,12 +4,10 @@
 import { useEffect, useState, FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ID, Permission, Role } from "appwrite";
 import { databases, account, storage } from "@/lib/appwriteClient";
 
 const DB_ID = "sealabid_main_db";
 const LISTINGS_COLLECTION_ID = "listings";
-const BIDS_COLLECTION_ID = "bids";
 const LISTING_IMAGES_BUCKET_ID = "listing_images";
 
 type Listing = {
@@ -93,7 +91,9 @@ export default function ListingDetailPage() {
   const [bidError, setBidError] = useState<string | null>(null);
   const [bidSuccess, setBidSuccess] = useState<string | null>(null);
 
+  // -----------------------------
   // Load listing
+  // -----------------------------
   useEffect(() => {
     if (!id) {
       setListingError("Listing ID is missing.");
@@ -148,7 +148,9 @@ export default function ListingDetailPage() {
     };
   }, [id]);
 
+  // -----------------------------
   // Load current user (if any)
+  // -----------------------------
   useEffect(() => {
     let cancelled = false;
 
@@ -180,6 +182,9 @@ export default function ListingDetailPage() {
     };
   }, []);
 
+  // -----------------------------
+  // Place sealed bid via API
+  // -----------------------------
   async function handlePlaceBid(e: FormEvent) {
     e.preventDefault();
     setBidError(null);
@@ -229,45 +234,38 @@ export default function ListingDetailPage() {
     setBidSubmitting(true);
 
     try {
-      // 1) Create bid document (sealed)
-      const sellerId = listing.sellerId || "";
-
-      const permissions = [
-        // Bidder can see their own bid
-        Permission.read(Role.user(currentUserId)),
-        // Seller can see bids on their listing (for envelope opening later)
-        sellerId ? Permission.read(Role.user(sellerId)) : null,
-        sellerId ? Permission.update(Role.user(sellerId)) : null,
-        sellerId ? Permission.delete(Role.user(sellerId)) : null,
-      ].filter(Boolean) as string[];
-
-      await databases.createDocument(
-        DB_ID,
-        BIDS_COLLECTION_ID,
-        ID.unique(),
-        {
+      const res = await fetch("/api/place-bid", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
           listingId: listing.$id,
+          amount,
           bidderId: currentUserId,
           bidderName: currentUserName,
-          amount,
-        },
-        permissions
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        const msg =
+          data?.error ||
+          data?.message ||
+          "Failed to place bid. Please try again.";
+        setBidError(msg);
+        return;
+      }
+
+      const newCount =
+        typeof data?.bidsCount === "number"
+          ? data.bidsCount
+          : (listing.bidsCount || 0) + 1;
+
+      setListing((prev) =>
+        prev ? { ...prev, bidsCount: newCount } : prev
       );
-
-      // 2) Increment bidsCount on listing
-      const newCount = (listing.bidsCount || 0) + 1;
-
-      await databases.updateDocument(
-        DB_ID,
-        LISTINGS_COLLECTION_ID,
-        listing.$id,
-        {
-          bidsCount: newCount,
-        }
-      );
-
-      // 3) Update local state
-      setListing((prev) => (prev ? { ...prev, bidsCount: newCount } : prev));
 
       setBidSuccess("Your sealed bid has been recorded.");
       setBidAmount("");
@@ -283,7 +281,9 @@ export default function ListingDetailPage() {
     }
   }
 
+  // -----------------------------
   // Loading / error states
+  // -----------------------------
   if (loadingListing) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -319,7 +319,6 @@ export default function ListingDetailPage() {
   const bidsCount = listing.bidsCount || 0;
 
   const biddingClosed = timeInfo.ended || listing.status !== "active";
-
   const userIsSeller = currentUserId && listing.sellerId === currentUserId;
 
   let envelopeLabel = "No envelopes yet";
@@ -328,6 +327,9 @@ export default function ListingDetailPage() {
 
   const hasImages = listing.imageFileIds && listing.imageFileIds.length > 0;
 
+  // -----------------------------
+  // RENDER
+  // -----------------------------
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       <div className="mx-auto max-w-3xl px-4 py-10 sm:py-14 space-y-6">
@@ -475,9 +477,9 @@ export default function ListingDetailPage() {
                   : "Seller has not set a target"}
               </p>
               <p className="text-[11px] text-slate-400">
-                This “make me happy” target is private to the seller. Buyers never
-                see it – it simply helps the seller decide whether sealed offers
-                feel worth accepting.
+                This “make me happy” target is private to the seller. Buyers
+                never see it – it simply helps the seller decide whether sealed
+                offers feel worth accepting.
               </p>
             </div>
           </div>
@@ -492,15 +494,16 @@ export default function ListingDetailPage() {
           {/* Various states */}
           {biddingClosed && (
             <p className="text-xs text-slate-400">
-              Bidding is closed on this listing. The seller can decide whether to
-              accept one of the envelopes or mark it as no sale.
+              Bidding is closed on this listing. The seller can decide whether
+              to accept one of the envelopes or mark it as no sale.
             </p>
           )}
 
           {!biddingClosed && userIsSeller && (
             <p className="text-xs text-slate-400">
-              You&apos;re the seller for this listing. You&apos;ll see your envelopes
-              when the listing ends – you can&apos;t bid on your own item.
+              You&apos;re the seller for this listing. You&apos;ll see your
+              envelopes when the listing ends – you can&apos;t bid on your own
+              item.
             </p>
           )}
 
@@ -509,7 +512,8 @@ export default function ListingDetailPage() {
             !checkingUser &&
             !currentUserId && (
               <p className="text-xs text-slate-400">
-                To place a sealed bid you&apos;ll need an account and a verified email.{" "}
+                To place a sealed bid you&apos;ll need an account and a
+                verified email.{" "}
                 <Link
                   href="/login"
                   className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
@@ -525,8 +529,8 @@ export default function ListingDetailPage() {
             !userIsSeller &&
             currentUserVerified === false && (
               <p className="text-xs text-slate-400">
-                Your email address is not verified. You must verify it before placing a
-                sealed bid.{" "}
+                Your email address is not verified. You must verify it before
+                placing a sealed bid.{" "}
                 <Link
                   href="/verify-email"
                   className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
@@ -568,8 +572,8 @@ export default function ListingDetailPage() {
                   </div>
                   <p className="text-[11px] text-slate-400">
                     You won&apos;t see other bids and there&apos;s no
-                    &quot;currently winning&quot; indicator. This is what the item is
-                    worth to you, not a public bidding game.
+                    &quot;currently winning&quot; indicator. This is what the
+                    item is worth to you, not a public bidding game.
                   </p>
                 </div>
 
@@ -584,9 +588,9 @@ export default function ListingDetailPage() {
             )}
 
           <p className="text-[11px] text-slate-500">
-            When this listing ends, the seller will open all envelopes and can choose a
-            buyer based on price and profile – or decide there&apos;s no sale. The
-            highest amount doesn&apos;t always win.
+            When this listing ends, the seller will open all envelopes and can
+            choose a buyer based on price and profile – or decide there&apos;s
+            no sale. The highest amount doesn&apos;t always win.
           </p>
         </section>
       </div>

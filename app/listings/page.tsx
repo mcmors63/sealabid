@@ -1,36 +1,26 @@
 // app/listings/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Query } from "appwrite";
-import { databases } from "@/lib/appwriteClient";
+import { databases, storage } from "@/lib/appwriteClient";
 
 const DB_ID = "sealabid_main_db";
 const LISTINGS_COLLECTION_ID = "listings";
+const LISTING_IMAGES_BUCKET_ID = "listing_images";
 
 type Listing = {
   $id: string;
   title: string;
-  description: string;
-  startingPrice?: number;
+  description?: string;
   durationDays: number;
   endsAt: string;
   status: string;
   category?: string;
   bidsCount?: number;
+  imageFileIds?: string[];
 };
-
-type CategoryFilter =
-  | "all"
-  | "art"
-  | "collectibles"
-  | "fashion"
-  | "tech"
-  | "home"
-  | "vehicles"
-  | "charity"
-  | "other";
 
 const CATEGORY_LABELS: Record<string, string> = {
   art: "Art & prints",
@@ -43,22 +33,28 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-function timeRemainingLabel(endsAt: string) {
+function timeStatus(endsAt: string) {
   const end = new Date(endsAt).getTime();
   const now = Date.now();
   const diff = end - now;
 
-  if (Number.isNaN(end)) return "Unknown end time";
+  if (Number.isNaN(end)) {
+    return { label: "Unknown end time", ended: false };
+  }
 
-  if (diff <= 0) return "Ended";
+  if (diff <= 0) {
+    return { label: "Auction ended", ended: true };
+  }
 
   const minutes = Math.floor(diff / (1000 * 60));
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
 
-  if (days > 0) return `Ends in ${days} day${days === 1 ? "" : "s"}`;
-  if (hours > 0) return `Ends in ${hours} hour${hours === 1 ? "" : "s"}`;
-  return `Ends in ${minutes} min${minutes === 1 ? "" : "s"}`;
+  if (days > 0)
+    return { label: `Ends in ${days} day${days === 1 ? "" : "s"}`, ended: false };
+  if (hours > 0)
+    return { label: `Ends in ${hours} hour${hours === 1 ? "" : "s"}`, ended: false };
+  return { label: `Ends in ${minutes} min${minutes === 1 ? "" : "s"}`, ended: false };
 }
 
 export default function ListingsPage() {
@@ -66,19 +62,17 @@ export default function ListingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-
   useEffect(() => {
     let cancelled = false;
 
-    async function loadListings() {
+    async function load() {
       try {
-        const res = await databases.listDocuments(
-          DB_ID,
-          LISTINGS_COLLECTION_ID,
-          [Query.equal("status", "active"), Query.orderAsc("endsAt")]
-        );
+        setLoading(true);
+        setError(null);
+
+        const res = await databases.listDocuments(DB_ID, LISTINGS_COLLECTION_ID, [
+          Query.orderDesc("endsAt"),
+        ]);
 
         if (cancelled) return;
 
@@ -88,152 +82,57 @@ export default function ListingsPage() {
           $id: doc.$id,
           title: doc.title,
           description: doc.description,
-          startingPrice: doc.startingPrice,
           durationDays: doc.durationDays,
           endsAt: doc.endsAt,
           status: doc.status,
           category: doc.category,
-          bidsCount:
-            typeof doc.bidsCount === "number" ? doc.bidsCount : 0,
+          bidsCount: typeof doc.bidsCount === "number" ? doc.bidsCount : 0,
+          imageFileIds: Array.isArray(doc.imageFileIds) ? doc.imageFileIds : [],
         }));
 
         setListings(mapped);
       } catch (err: any) {
         console.error(err);
-        if (!cancelled) {
-          const msg =
-            err?.message ||
-            err?.response?.message ||
-            "Failed to load listings.";
-          setError(msg);
-        }
+        const msg =
+          err?.message ||
+          err?.response?.message ||
+          "Failed to load listings. Please try again.";
+        setError(msg);
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
-    loadListings();
+    load();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const filteredListings = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-
-    return listings.filter((listing) => {
-      // Category filter
-      if (categoryFilter !== "all") {
-        const cat = (listing.category || "other") as CategoryFilter;
-        if (cat !== categoryFilter) return false;
-      }
-
-      // Text search (title + description)
-      if (q) {
-        const haystack =
-          (listing.title || "").toLowerCase() +
-          " " +
-          (listing.description || "").toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-
-      return true;
-    });
-  }, [listings, categoryFilter, searchQuery]);
-
-  const total = listings.length;
-  const shown = filteredListings.length;
-
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       <div className="mx-auto max-w-5xl px-4 py-10 sm:py-14 space-y-6">
-        {/* Header */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              Browse <span className="text-emerald-400">listings</span>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-300">
+              Sealabid
+            </p>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">
+              Current listings
             </h1>
-            <p className="mt-2 text-sm text-slate-300 max-w-xl">
-              These are active Sealabid listings. Bids are sealed – you
-              won&apos;t see what anyone else has offered. When time is up, the
-              seller chooses a buyer based on price and profile.
+            <p className="mt-2 text-sm text-slate-300">
+              Browse items accepting sealed bids. You&apos;ll only ever see
+              envelopes, never someone else&apos;s amount.
             </p>
           </div>
           <Link
             href="/sell"
-            className="inline-flex rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
+            className="hidden rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-md shadow-emerald-500/30 hover:bg-emerald-400 sm:inline-flex"
           >
             Sell an item
           </Link>
         </div>
 
-        {/* Filters */}
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 space-y-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setCategoryFilter("all")}
-                className={`rounded-full px-3 py-1.5 font-medium transition ${
-                  categoryFilter === "all"
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-800 text-slate-200 hover:bg-slate-700"
-                }`}
-              >
-                All
-              </button>
-              {[
-                "art",
-                "collectibles",
-                "fashion",
-                "tech",
-                "home",
-                "vehicles",
-                "charity",
-                "other",
-              ].map((cat) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => setCategoryFilter(cat as CategoryFilter)}
-                  className={`rounded-full px-3 py-1.5 font-medium transition ${
-                    categoryFilter === cat
-                      ? "bg-emerald-500 text-slate-950"
-                      : "bg-slate-800 text-slate-200 hover:bg-slate-700"
-                  }`}
-                >
-                  {CATEGORY_LABELS[cat]}
-                </button>
-              ))}
-            </div>
-
-            <div className="w-full sm:w-64">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search title or description…"
-                className="w-full rounded-full border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-50 outline-none focus:border-emerald-400"
-              />
-            </div>
-          </div>
-
-          <p className="text-[11px] text-slate-400">
-            Showing{" "}
-            <span className="font-semibold text-emerald-300">
-              {shown}
-            </span>{" "}
-            of{" "}
-            <span className="font-semibold text-slate-200">
-              {total}
-            </span>{" "}
-            active listing{total === 1 ? "" : "s"}.
-          </p>
-        </section>
-
-        {/* Loading / error / empty states */}
         {loading && (
           <p className="text-sm text-slate-300">Loading listings…</p>
         )}
@@ -244,77 +143,129 @@ export default function ListingsPage() {
           </div>
         )}
 
-        {!loading && !error && total === 0 && (
+        {!loading && !error && listings.length === 0 && (
           <p className="text-sm text-slate-300">
-            There are no active listings yet. Be the first to{" "}
+            No listings yet. Be the first to{" "}
             <Link
               href="/sell"
               className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
             >
-              create one
+              list an item
             </Link>
             .
           </p>
         )}
 
-        {!loading && !error && total > 0 && shown === 0 && (
-          <p className="text-sm text-slate-300">
-            Nothing matches your filters. Try a different category or clear your
-            search.
-          </p>
-        )}
-
-        {/* Cards */}
-        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-          {filteredListings.map((listing) => {
-            const timeLabel = timeRemainingLabel(listing.endsAt);
+        <div className="grid gap-5 md:grid-cols-2">
+          {listings.map((listing) => {
+            const timeInfo = timeStatus(listing.endsAt);
+            const bidsCount = listing.bidsCount || 0;
+            const hasImages =
+              listing.imageFileIds && listing.imageFileIds.length > 0;
             const categoryKey =
               (listing.category as keyof typeof CATEGORY_LABELS) || "other";
-            const categoryLabel =
-              CATEGORY_LABELS[categoryKey] || "Other";
-            const bidsCount = listing.bidsCount || 0;
+            const categoryLabel = CATEGORY_LABELS[categoryKey] || "Other";
 
             let envelopeLabel = "No envelopes yet";
             if (bidsCount === 1) envelopeLabel = "1 envelope";
             if (bidsCount > 1) envelopeLabel = `${bidsCount} envelopes`;
 
+            const previewSrc =
+              hasImages && listing.imageFileIds
+                ? storage.getFileView(
+                    LISTING_IMAGES_BUCKET_ID,
+                    listing.imageFileIds[0]
+                  )
+                : null;
+
             return (
               <Link
                 key={listing.$id}
                 href={`/listings/${listing.$id}`}
-                className="group rounded-3xl border border-slate-800 bg-slate-900/70 p-5 shadow-lg shadow-slate-900/60 hover:border-emerald-400 hover:shadow-emerald-500/20 transition"
+                className="group flex flex-col overflow-hidden rounded-3xl border border-slate-800 bg-slate-900/70 hover:border-emerald-500/60 hover:bg-slate-900 transition"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <h2 className="text-sm font-semibold text-slate-50 line-clamp-2 group-hover:text-emerald-200">
-                    {listing.title}
-                  </h2>
-                  <span className="rounded-full bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
-                    {timeLabel}
-                  </span>
+                {/* Image */}
+                <div className="relative h-44 w-full overflow-hidden bg-slate-900">
+                  {previewSrc ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={String(previewSrc)}
+                      alt={listing.title}
+                      className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 text-xs text-slate-400">
+                      No photos yet
+                    </div>
+                  )}
+
+                  <div className="absolute left-3 top-3 rounded-full bg-black/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-100">
+                    {categoryLabel}
+                  </div>
+
+                  <div
+                    className={`absolute right-3 top-3 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                      timeInfo.ended
+                        ? "bg-slate-900/80 text-slate-200"
+                        : "bg-emerald-500/90 text-slate-950"
+                    }`}
+                  >
+                    {timeInfo.label}
+                  </div>
                 </div>
 
-                <p className="mt-2 text-xs text-slate-400 line-clamp-3">
-                  {listing.description}
-                </p>
-
-                <div className="mt-4 flex items-center justify-between text-xs">
-                  <div className="space-y-1">
-                    <p className="font-semibold text-slate-200">
-                      {listing.startingPrice
-                        ? `Make me happy: £${listing.startingPrice.toLocaleString(
-                            "en-GB"
-                          )}`
-                        : "No “make me happy” target"}
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      {categoryLabel} · {listing.durationDays} days
-                    </p>
+                {/* Content */}
+                <div className="flex flex-1 flex-col gap-3 p-4">
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-50 line-clamp-2">
+                      {listing.title}
+                    </h2>
+                    {listing.description && (
+                      <p className="mt-1 text-xs text-slate-400 line-clamp-2">
+                        {listing.description}
+                      </p>
+                    )}
                   </div>
-                  <div className="text-right text-[11px] text-emerald-300">
-                    <p>{envelopeLabel}</p>
-                    <p className="text-slate-400 group-hover:text-emerald-200">
-                      View details →
-                    </p>
+
+                  {/* Envelopes */}
+                  <div className="mt-auto flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Envelopes
+                      </p>
+                      <p className="text-xs text-emerald-300">{envelopeLabel}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        {bidsCount === 0 && (
+                          <span className="text-[11px] text-slate-500">
+                            Be the first to bid
+                          </span>
+                        )}
+                        {Array.from({ length: Math.min(bidsCount, 5) }).map(
+                          (_, i) => (
+                            <div
+                              key={i}
+                              className="flex h-6 w-8 items-center justify-center rounded-md border border-amber-400/60 bg-amber-500/10 text-[10px]"
+                            >
+                              ✉️
+                            </div>
+                          )
+                        )}
+                        {bidsCount > 5 && (
+                          <span className="ml-1 text-[11px] text-amber-200">
+                            +{bidsCount - 5} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-right text-[11px] text-slate-400">
+                      <p className="font-semibold text-slate-100">
+                        {timeInfo.ended ? "Ended" : "Active"}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Tap to see details
+                      </p>
+                    </div>
                   </div>
                 </div>
               </Link>
