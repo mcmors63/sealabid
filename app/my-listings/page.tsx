@@ -99,7 +99,11 @@ export default function MyListingsPage() {
         const res = await databases.listDocuments(
           DB_ID,
           LISTINGS_COLLECTION_ID,
-          [Query.equal("sellerId", userId), Query.orderDesc("endsAt")]
+          [
+            // Tell TS this is definitely a string at this point
+            Query.equal("sellerId", userId as string),
+            Query.orderDesc("endsAt"),
+          ]
         );
 
         if (cancelled) return;
@@ -180,8 +184,8 @@ export default function MyListingsPage() {
               Your listings
             </h1>
             <p className="mt-2 text-sm text-slate-300">
-              See items you&apos;ve put up for sealed bids, how many envelopes they
-              have, and when they end.
+              See items you&apos;ve put up for sealed bids, how many envelopes
+              they have, and when they end.
             </p>
           </div>
           <Link
