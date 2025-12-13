@@ -27,14 +27,17 @@ export default function LoginPage() {
     setSubmitting(true);
 
     try {
-      await account.createEmailPasswordSession({
-        email,
-        password,
-      });
+      // ✅ Proper Appwrite web SDK call – two parameters
+      await account.createEmailPasswordSession(email, password);
 
-      router.push("/");
+      // Optional: sanity check (can remove later if you want)
+      // const me = await account.get();
+      // console.log("Logged in as:", me);
+
+      // ✅ Go straight to dashboard so we can see session in action
+      router.push("/dashboard");
     } catch (err: any) {
-      console.error(err);
+      console.error("Login error:", err);
       const message =
         err?.message ||
         err?.response?.message ||
@@ -100,7 +103,10 @@ export default function LoginPage() {
 
           <p className="text-xs text-slate-400">
             New to Sealabid?{" "}
-            <Link href="/register" className="text-emerald-300 hover:text-emerald-200">
+            <Link
+              href="/register"
+              className="text-emerald-300 hover:text-emerald-200"
+            >
               Create an account
             </Link>
             .

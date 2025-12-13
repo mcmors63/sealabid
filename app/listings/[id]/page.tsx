@@ -4,14 +4,25 @@
 import { useEffect, useState, FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { Query, ID } from "appwrite";
 import { databases, account, storage } from "@/lib/appwriteClient";
+import EnvelopePanel from "@/components/EnvelopePanel";
 
 const DB_ID = "sealabid_main_db";
 const LISTINGS_COLLECTION_ID = "listings";
 const LISTING_IMAGES_BUCKET_ID = "listing_images";
 
+// Envelopes live in the same DB but own collection
+const ENVELOPES_DB_ID = process.env.NEXT_PUBLIC_APPWRITE_ENVELOPES_DB_ID!;
+const ENVELOPES_COLLECTION_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_ENVELOPES_COLLECTION_ID!;
+
+// New collection for abuse reports
+const ABUSE_REPORTS_COLLECTION_ID = "abuse_reports";
+
 type Listing = {
   $id: string;
+  reference: string;
   title: string;
   description: string;
   startingPrice?: number;
@@ -22,6 +33,18 @@ type Listing = {
   sellerId?: string;
   bidsCount?: number;
   imageFileIds?: string[];
+};
+
+type EnvelopeStatus = "submitted" | "withdrawn" | "winner" | "rejected";
+
+type EnvelopeDoc = {
+  $id: string;
+  listingId: string;
+  buyerId: string;
+  amount: number;
+  message?: string;
+  status: EnvelopeStatus;
+  $createdAt: string;
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -44,28 +67,59 @@ function formatEndsAt(endsAt: string) {
   });
 }
 
-function timeStatus(endsAt: string) {
+// Live time helper – takes "now" as a parameter so we can update it
+function timeStatus(endsAt: string, nowMs: number = Date.now()) {
   const end = new Date(endsAt).getTime();
-  const now = Date.now();
-  const diff = end - now;
 
   if (Number.isNaN(end)) {
-    return { label: "Unknown end time", ended: false };
+    return {
+      label: "Unknown end time",
+      ended: false,
+      days: 0,
+      hours: 0,
+      minutes: 0,
+      seconds: 0,
+    };
   }
+
+  const diff = end - nowMs;
 
   if (diff <= 0) {
-    return { label: "Auction ended", ended: true };
+    return {
+      label: "Auction ended",
+      ended: true,
+      days: 0,
+      hours: 0,
+      minutes: 0,
+      seconds: 0,
+    };
   }
 
-  const minutes = Math.floor(diff / (1000 * 60));
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
+  const totalSeconds = Math.floor(diff / 1000);
+  const days = Math.floor(totalSeconds / (60 * 60 * 24));
+  const hours = Math.floor((totalSeconds % (60 * 60 * 24)) / (60 * 60));
+  const minutes = Math.floor((totalSeconds % (60 * 60)) / 60);
+  const seconds = totalSeconds % 60;
 
-  if (days > 0)
-    return { label: `Ends in ${days} day${days === 1 ? "" : "s"}`, ended: false };
-  if (hours > 0)
-    return { label: `Ends in ${hours} hour${hours === 1 ? "" : "s"}`, ended: false };
-  return { label: `Ends in ${minutes} min${minutes === 1 ? "" : "s"}`, ended: false };
+  let label: string;
+  if (days > 0) {
+    label = `Ends in ${days} day${days === 1 ? "" : "s"}`;
+  } else if (hours > 0) {
+    label = `Ends in ${hours} hour${hours === 1 ? "" : "s"}`;
+  } else if (minutes > 0) {
+    label = `Ends in ${minutes} min${minutes === 1 ? "" : "s"}`;
+  } else {
+    label = `Ends in ${seconds} sec${seconds === 1 ? "" : "s"}`;
+  }
+
+  return {
+    label,
+    ended: false,
+    days,
+    hours,
+    minutes,
+    seconds,
+  };
 }
 
 export default function ListingDetailPage() {
@@ -83,13 +137,26 @@ export default function ListingDetailPage() {
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserName, setCurrentUserName] = useState<string | null>(null);
-  const [currentUserVerified, setCurrentUserVerified] = useState<boolean | null>(null);
+  const [currentUserVerified, setCurrentUserVerified] = useState<boolean | null>(
+    null
+  );
   const [checkingUser, setCheckingUser] = useState(true);
 
-  const [bidAmount, setBidAmount] = useState("");
-  const [bidSubmitting, setBidSubmitting] = useState(false);
-  const [bidError, setBidError] = useState<string | null>(null);
-  const [bidSuccess, setBidSuccess] = useState<string | null>(null);
+  // "Now" for the live timer
+  const [nowMs, setNowMs] = useState<number>(Date.now());
+
+  // Seller envelopes state
+  const [envelopes, setEnvelopes] = useState<EnvelopeDoc[]>([]);
+  const [envelopesLoading, setEnvelopesLoading] = useState(false);
+  const [envelopesError, setEnvelopesError] = useState<string | null>(null);
+  const [choosingWinnerId, setChoosingWinnerId] = useState<string | null>(null);
+
+  // Abuse report state
+  const [reportingEnvelope, setReportingEnvelope] =
+    useState<EnvelopeDoc | null>(null);
+  const [reportReason, setReportReason] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportSuccess, setReportSuccess] = useState<string | null>(null);
 
   // -----------------------------
   // Load listing
@@ -115,6 +182,7 @@ export default function ListingDetailPage() {
 
         setListing({
           $id: doc.$id,
+          reference: doc.reference || doc.$id,
           title: doc.title,
           description: doc.description,
           startingPrice: doc.startingPrice,
@@ -183,101 +251,207 @@ export default function ListingDetailPage() {
   }, []);
 
   // -----------------------------
-  // Place sealed bid via API
+  // Live timer – tick every second while active
   // -----------------------------
-  async function handlePlaceBid(e: FormEvent) {
-    e.preventDefault();
-    setBidError(null);
-    setBidSuccess(null);
+  useEffect(() => {
+    if (!listing) return;
 
-    if (!listing) {
-      setBidError("Listing not loaded.");
-      return;
+    const end = new Date(listing.endsAt).getTime();
+    if (Number.isNaN(end)) return;
+    if (end <= Date.now()) return; // already ended
+
+    const interval = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [listing?.endsAt, listing]);
+
+  const timeInfo = listing ? timeStatus(listing.endsAt, nowMs) : null;
+  const categoryKey =
+    listing && listing.category
+      ? ((listing.category as keyof typeof CATEGORY_LABELS) || "other")
+      : "other";
+  const categoryLabel = CATEGORY_LABELS[categoryKey] || "Other";
+  const bidsCount = listing?.bidsCount || 0;
+
+  const biddingClosed =
+    !!listing && !!timeInfo && (timeInfo.ended || listing.status !== "active");
+  const userIsSeller =
+    !!listing && !!currentUserId && listing.sellerId === currentUserId;
+
+  // Wording identical to listings page
+  let envelopeLabel = "No post delivered";
+  if (bidsCount === 1) {
+    envelopeLabel = "This item has received 1 sealed bid";
+  } else if (bidsCount > 1) {
+    envelopeLabel = `This item has received ${bidsCount} sealed bids`;
+  }
+
+  const hasImages =
+    listing && listing.imageFileIds && listing.imageFileIds.length > 0;
+
+  const countdownString =
+    timeInfo && !timeInfo.ended
+      ? `${String(timeInfo.days).padStart(2, "0")}d ${String(
+          timeInfo.hours
+        ).padStart(2, "0")}h ${String(timeInfo.minutes).padStart(
+          2,
+          "0"
+        )}m ${String(timeInfo.seconds).padStart(2, "0")}s`
+      : "00d 00h 00m 00s";
+
+  // -----------------------------
+  // Load envelopes for seller
+  // -----------------------------
+  useEffect(() => {
+    if (!listing || !currentUserId) return;
+    if (listing.sellerId !== currentUserId) return;
+
+    let cancelled = false;
+
+    async function loadEnvelopes() {
+      setEnvelopesLoading(true);
+      setEnvelopesError(null);
+      try {
+        const res: any = await databases.listDocuments(
+          ENVELOPES_DB_ID,
+          ENVELOPES_COLLECTION_ID,
+          [Query.equal("listingId", listing.$id), Query.orderDesc("$createdAt")]
+        );
+
+        if (cancelled) return;
+
+        const docs: EnvelopeDoc[] = res.documents || [];
+        setEnvelopes(docs);
+      } catch (err: any) {
+        if (!cancelled) {
+          console.error("Error loading envelopes", err);
+          setEnvelopesError(
+            err?.message ||
+              err?.response?.message ||
+              "Could not load envelopes for this listing."
+          );
+        }
+      } finally {
+        if (!cancelled) setEnvelopesLoading(false);
+      }
     }
 
-    if (!currentUserId) {
-      setBidError("You must be logged in to place a bid.");
-      return;
-    }
+    loadEnvelopes();
+    return () => {
+      cancelled = true;
+    };
+  }, [listing?.$id, listing?.sellerId, currentUserId]);
 
-    if (!currentUserVerified) {
-      setBidError("You must verify your email before placing a bid.");
-      return;
-    }
+  // -----------------------------
+  // Seller chooses a winner
+  // -----------------------------
+  async function handleChooseWinner(envelopeId: string) {
+    if (!listing || !currentUserId) return;
+    if (listing.sellerId !== currentUserId) return;
 
-    if (listing.sellerId && listing.sellerId === currentUserId) {
-      setBidError("You can't bid on your own listing.");
-      return;
-    }
+    const ok = window.confirm(
+      "Confirm this buyer as your chosen winner? All other non-withdrawn envelopes will be marked as rejected."
+    );
+    if (!ok) return;
 
-    const timeInfo = timeStatus(listing.endsAt);
-    if (timeInfo.ended || listing.status !== "active") {
-      setBidError("This listing is no longer accepting bids.");
-      return;
-    }
-
-    if (!bidAmount.trim()) {
-      setBidError("Please enter your bid amount.");
-      return;
-    }
-
-    const cleaned = bidAmount.replace(/[^0-9]/g, "");
-    const parsed = Number(cleaned);
-
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      setBidError("Bid must be a positive whole number of pounds.");
-      return;
-    }
-
-    const amount = Math.round(parsed);
-
-    setBidSubmitting(true);
+    setEnvelopesError(null);
+    setChoosingWinnerId(envelopeId);
 
     try {
-      const res = await fetch("/api/place-bid", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          listingId: listing.$id,
-          amount,
-          bidderId: currentUserId,
-          bidderName: currentUserName,
-        }),
+      const updates = envelopes.map(async (env) => {
+        if (env.$id === envelopeId) {
+          await databases.updateDocument(
+            ENVELOPES_DB_ID,
+            ENVELOPES_COLLECTION_ID,
+            env.$id,
+            { status: "winner" }
+          );
+        } else if (env.status !== "withdrawn") {
+          await databases.updateDocument(
+            ENVELOPES_DB_ID,
+            ENVELOPES_COLLECTION_ID,
+            env.$id,
+            { status: "rejected" }
+          );
+        }
       });
 
-      const data = await res.json().catch(() => null);
+      await Promise.all(updates);
 
-      if (!res.ok) {
-        const msg =
-          data?.error ||
-          data?.message ||
-          "Failed to place bid. Please try again.";
-        setBidError(msg);
-        return;
-      }
+      // Reload envelopes after updates
+      const res: any = await databases.listDocuments(
+        ENVELOPES_DB_ID,
+        ENVELOPES_COLLECTION_ID,
+        [Query.equal("listingId", listing.$id), Query.orderDesc("$createdAt")]
+      );
+      setEnvelopes(res.documents || []);
+    } catch (err: any) {
+      console.error("Error choosing winner", err);
+      setEnvelopesError(
+        err?.message ||
+          err?.response?.message ||
+          "Could not update envelopes. Please try again."
+      );
+    } finally {
+      setChoosingWinnerId(null);
+    }
+  }
 
-      const newCount =
-        typeof data?.bidsCount === "number"
-          ? data.bidsCount
-          : (listing.bidsCount || 0) + 1;
+  // -----------------------------
+  // Abuse reporting
+  // -----------------------------
+  function handleOpenReport(env: EnvelopeDoc) {
+    setReportingEnvelope(env);
+    setReportReason("");
+    setReportSuccess(null);
+    setEnvelopesError(null);
+  }
 
-      setListing((prev) =>
-        prev ? { ...prev, bidsCount: newCount } : prev
+  async function handleSubmitReport(e: FormEvent) {
+    e.preventDefault();
+    if (!listing || !currentUserId || !reportingEnvelope) return;
+
+    const trimmed = reportReason.trim();
+    if (!trimmed) {
+      setEnvelopesError("Please describe what happened.");
+      return;
+    }
+
+    setReportSubmitting(true);
+    setEnvelopesError(null);
+    setReportSuccess(null);
+
+    try {
+      await databases.createDocument(
+        DB_ID,
+        ABUSE_REPORTS_COLLECTION_ID,
+        ID.unique(),
+        {
+          listingId: listing.$id,
+          envelopeId: reportingEnvelope.$id,
+          sellerId: currentUserId,
+          buyerId: reportingEnvelope.buyerId,
+          message: reportingEnvelope.message || "",
+          reason: trimmed,
+          status: "open",
+          createdAt: new Date().toISOString(),
+        }
       );
 
-      setBidSuccess("Your sealed bid has been recorded.");
-      setBidAmount("");
+      setReportSuccess("Thank you. Your report has been submitted.");
+      setReportingEnvelope(null);
+      setReportReason("");
     } catch (err: any) {
-      console.error(err);
-      const msg =
+      console.error("Error submitting abuse report", err);
+      setEnvelopesError(
         err?.message ||
-        err?.response?.message ||
-        "Failed to place bid. Please try again.";
-      setBidError(msg);
+          err?.response?.message ||
+          "Could not submit report. Please try again."
+      );
     } finally {
-      setBidSubmitting(false);
+      setReportSubmitting(false);
     }
   }
 
@@ -294,7 +468,7 @@ export default function ListingDetailPage() {
     );
   }
 
-  if (listingError || !listing) {
+  if (listingError || !listing || !timeInfo) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50">
         <div className="mx-auto max-w-xl px-4 py-10 sm:py-14 space-y-3">
@@ -312,20 +486,17 @@ export default function ListingDetailPage() {
     );
   }
 
-  const timeInfo = timeStatus(listing.endsAt);
-  const categoryKey =
-    (listing.category as keyof typeof CATEGORY_LABELS) || "other";
-  const categoryLabel = CATEGORY_LABELS[categoryKey] || "Other";
-  const bidsCount = listing.bidsCount || 0;
-
-  const biddingClosed = timeInfo.ended || listing.status !== "active";
-  const userIsSeller = currentUserId && listing.sellerId === currentUserId;
-
-  let envelopeLabel = "No envelopes yet";
-  if (bidsCount === 1) envelopeLabel = "1 envelope so far";
-  if (bidsCount > 1) envelopeLabel = `${bidsCount} envelopes so far`;
-
-  const hasImages = listing.imageFileIds && listing.imageFileIds.length > 0;
+  // Small helpers for seller envelopes
+  const winnerEnvelope = envelopes.find((e) => e.status === "winner");
+  const activeEnvelopes = envelopes.filter(
+    (e) => e.status === "submitted" || e.status === "winner"
+  );
+  const totalSubmitted = envelopes.filter(
+    (e) =>
+      e.status === "submitted" ||
+      e.status === "winner" ||
+      e.status === "rejected"
+  ).length;
 
   // -----------------------------
   // RENDER
@@ -341,6 +512,9 @@ export default function ListingDetailPage() {
             <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">
               {listing.title}
             </h1>
+            <p className="mt-1 text-[11px] text-slate-400 font-mono">
+              Ref: {listing.reference}
+            </p>
           </div>
           <Link
             href="/listings"
@@ -355,11 +529,9 @@ export default function ListingDetailPage() {
           <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-4">
             <div className="grid gap-3 md:grid-cols-[2fr,1fr]">
               {listing.imageFileIds!.slice(0, 1).map((fileId) => {
-                const src = storage.getFilePreview(
+                const src = storage.getFileView(
                   LISTING_IMAGES_BUCKET_ID,
-                  fileId,
-                  900,
-                  900
+                  fileId
                 );
                 return (
                   <div
@@ -379,11 +551,9 @@ export default function ListingDetailPage() {
               {listing.imageFileIds!.length > 1 && (
                 <div className="grid grid-cols-2 gap-2">
                   {listing.imageFileIds!.slice(1, 5).map((fileId) => {
-                    const src = storage.getFilePreview(
+                    const src = storage.getFileView(
                       LISTING_IMAGES_BUCKET_ID,
-                      fileId,
-                      600,
-                      600
+                      fileId
                     );
                     return (
                       <div
@@ -429,12 +599,52 @@ export default function ListingDetailPage() {
                   {categoryLabel}
                 </span>
               </p>
-              <p className="text-xs text-slate-400">
-                Envelopes:{" "}
-                <span className="font-medium text-emerald-300">
-                  {envelopeLabel}
-                </span>
-              </p>
+
+              {/* Post / sealed bid row – same style as listings page */}
+              <div className="flex items-center justify-between text-[11px] mt-1">
+                <div className="flex items-center gap-2 text-slate-400">
+                  <span className="whitespace-nowrap">Post:</span>
+                  <span className="font-medium text-emerald-300">
+                    {envelopeLabel}
+                  </span>
+
+                  {bidsCount > 0 && (
+                    <div className="inline-flex items-center gap-2 rounded-md border border-amber-400 bg-amber-50 px-3 py-1 shadow-sm">
+                      <svg
+                        viewBox="0 0 24 16"
+                        aria-hidden="true"
+                        className="h-4 w-6"
+                      >
+                        <rect
+                          x={1}
+                          y={1}
+                          width={22}
+                          height={14}
+                          rx={2}
+                          fill="#FEF3C7"
+                          stroke="#D97706"
+                          strokeWidth={1.2}
+                        />
+                        <polyline
+                          points="2,2 12,9 22,2"
+                          fill="none"
+                          stroke="#B45309"
+                          strokeWidth={1.2}
+                        />
+                      </svg>
+                      <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-900">
+                        Sealed bid
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {!timeInfo.ended && (
+                  <span className="font-mono text-[10px] text-slate-300">
+                    {countdownString}
+                  </span>
+                )}
+              </div>
             </div>
             <span
               className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${
@@ -470,22 +680,16 @@ export default function ListingDetailPage() {
               </p>
               <p className="text-slate-200">
                 <span className="text-slate-400 text-xs uppercase tracking-wide">
-                  “Make me happy” target:
+                  Reference:
                 </span>{" "}
-                {listing.startingPrice
-                  ? `£${listing.startingPrice.toLocaleString("en-GB")}`
-                  : "Seller has not set a target"}
+                <span className="font-mono">{listing.reference}</span>
               </p>
-              <p className="text-[11px] text-slate-400">
-                This “make me happy” target is private to the seller. Buyers
-                never see it – it simply helps the seller decide whether sealed
-                offers feel worth accepting.
-              </p>
+              {/* NOTE: no "make me happy" target on the public listing page */}
             </div>
           </div>
         </section>
 
-        {/* PLACE BID SECTION */}
+        {/* BUYER PLACE BID SECTION */}
         <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-5 space-y-3 text-sm text-slate-200">
           <h2 className="text-sm font-semibold text-slate-50">
             Place a sealed bid
@@ -512,8 +716,8 @@ export default function ListingDetailPage() {
             !checkingUser &&
             !currentUserId && (
               <p className="text-xs text-slate-400">
-                To place a sealed bid you&apos;ll need an account and a
-                verified email.{" "}
+                To place a sealed bid you&apos;ll need an account and a verified
+                email.{" "}
                 <Link
                   href="/login"
                   className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
@@ -540,51 +744,14 @@ export default function ListingDetailPage() {
               </p>
             )}
 
+          {/* Envelope panel for eligible buyers */}
           {!biddingClosed &&
             currentUserId &&
             !userIsSeller &&
             currentUserVerified && (
-              <form onSubmit={handlePlaceBid} className="space-y-3 max-w-sm">
-                {bidError && (
-                  <div className="rounded-md border border-red-500/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
-                    {bidError}
-                  </div>
-                )}
-                {bidSuccess && (
-                  <div className="rounded-md border border-emerald-500/60 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-200">
-                    {bidSuccess}
-                  </div>
-                )}
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-200">
-                    Your sealed bid amount
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-slate-300">£</span>
-                    <input
-                      type="text"
-                      className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
-                      value={bidAmount}
-                      onChange={(e) => setBidAmount(e.target.value)}
-                      placeholder="Whole pounds only"
-                    />
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    You won&apos;t see other bids and there&apos;s no
-                    &quot;currently winning&quot; indicator. This is what the
-                    item is worth to you, not a public bidding game.
-                  </p>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={bidSubmitting}
-                  className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-slate-950 shadow-md shadow-emerald-500/30 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {bidSubmitting ? "Placing sealed bid..." : "Place sealed bid"}
-                </button>
-              </form>
+              <div className="mt-2">
+                <EnvelopePanel listingId={listing.$id} deadline={listing.endsAt} />
+              </div>
             )}
 
           <p className="text-[11px] text-slate-500">
@@ -593,6 +760,246 @@ export default function ListingDetailPage() {
             no sale. The highest amount doesn&apos;t always win.
           </p>
         </section>
+
+        {/* SELLER ENVELOPE REVIEW SECTION */}
+        {userIsSeller && (
+          <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-5 space-y-3 text-sm text-slate-200">
+            <h2 className="text-sm font-semibold text-slate-50">
+              Envelopes for this listing
+            </h2>
+
+            {!timeInfo.ended && (
+              <p className="text-xs text-slate-400">
+                You&apos;ll see all envelopes here once the sealed-bid window
+                has ended. Until then, they stay sealed.
+              </p>
+            )}
+
+            {timeInfo.ended && (
+              <>
+                {envelopesLoading && (
+                  <p className="text-xs text-slate-400">Loading envelopes…</p>
+                )}
+
+                {envelopesError && (
+                  <div className="rounded-md border border-red-500/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+                    {envelopesError}
+                  </div>
+                )}
+
+                {!envelopesLoading && !envelopesError && envelopes.length === 0 && (
+                  <p className="text-xs text-slate-400">
+                    No envelopes were submitted for this listing.
+                  </p>
+                )}
+
+                {!envelopesLoading && envelopes.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-[11px] text-slate-400">
+                      <span>
+                        Total envelopes (including rejected/withdrawn):{" "}
+                        <span className="font-medium text-slate-200">
+                          {envelopes.length}
+                        </span>
+                      </span>
+                      {winnerEnvelope && (
+                        <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 border border-emerald-500/50">
+                          Winner chosen
+                        </span>
+                      )}
+                    </div>
+
+                    {winnerEnvelope && (
+                      <div className="rounded-2xl border border-emerald-500/60 bg-emerald-950/30 px-3 py-3 text-xs text-emerald-50">
+                        <p className="font-semibold text-emerald-200">
+                          Your chosen buyer
+                        </p>
+                        <p className="mt-1">
+                          Amount:{" "}
+                          <span className="font-semibold">
+                            £{winnerEnvelope.amount.toLocaleString("en-GB")}
+                          </span>
+                        </p>
+                        <p className="mt-1 text-[11px] text-emerald-100/80">
+                          Buyer ID (internal):{" "}
+                          <span className="font-mono">
+                            {winnerEnvelope.buyerId}
+                          </span>
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      {envelopes.map((env) => {
+                        const created = new Date(env.$createdAt);
+                        const statusLabel =
+                          env.status === "submitted"
+                            ? "Submitted"
+                            : env.status === "withdrawn"
+                            ? "Withdrawn"
+                            : env.status === "winner"
+                            ? "Winner"
+                            : "Rejected";
+
+                        const statusClasses =
+                          env.status === "winner"
+                            ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/60"
+                            : env.status === "withdrawn"
+                            ? "bg-slate-800 text-slate-300 border-slate-600/80"
+                            : env.status === "rejected"
+                            ? "bg-red-500/10 text-red-300 border-red-500/60"
+                            : "bg-slate-800 text-slate-200 border-slate-600/80";
+
+                        return (
+                          <div
+                            key={env.$id}
+                            className="rounded-2xl border border-slate-800 bg-slate-950/60 px-4 py-3 space-y-2"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs text-slate-400">
+                                  Offer amount
+                                </p>
+                                <p className="text-sm font-semibold text-slate-50">
+                                  £{env.amount.toLocaleString("en-GB")}
+                                </p>
+                              </div>
+                              <span
+                                className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusClasses}`}
+                              >
+                                {statusLabel}
+                              </span>
+                            </div>
+
+                            {env.message && (
+                              <div>
+                                <p className="text-[11px] text-slate-400">
+                                  Buyer message
+                                </p>
+                                <p className="mt-1 text-xs text-slate-200 whitespace-pre-wrap">
+                                  {env.message}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenReport(env)}
+                                  className="mt-2 inline-flex items-center rounded-full border border-rose-500/60 bg-rose-950/40 px-3 py-1.5 text-[11px] font-semibold text-rose-100 hover:border-rose-400"
+                                >
+                                  Report abuse
+                                </button>
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-between text-[11px] text-slate-500">
+                              <span className="font-mono">
+                                Buyer ID: {env.buyerId}
+                              </span>
+                              <span>
+                                Submitted:{" "}
+                                {created.toLocaleString("en-GB", {
+                                  dateStyle: "short",
+                                  timeStyle: "short",
+                                })}
+                              </span>
+                            </div>
+
+                            {timeInfo.ended &&
+                              env.status === "submitted" &&
+                              !winnerEnvelope && (
+                                <div className="pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleChooseWinner(env.$id)}
+                                    disabled={
+                                      choosingWinnerId !== null ||
+                                      envelopesLoading
+                                    }
+                                    className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-3 py-1.5 text-[11px] font-semibold text-slate-950 shadow-md shadow-emerald-500/30 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                                  >
+                                    {choosingWinnerId === env.$id
+                                      ? "Choosing winner…"
+                                      : "Choose this buyer as winner"}
+                                  </button>
+                                </div>
+                              )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {reportingEnvelope && (
+                  <div className="mt-4 rounded-2xl border border-rose-500/60 bg-rose-950/40 p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-rose-50">
+                          Report abusive message
+                        </p>
+                        <p className="mt-1 text-[11px] text-rose-100">
+                          This sends us the buyer&apos;s message and your
+                          explanation so we can review it.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReportingEnvelope(null);
+                          setReportReason("");
+                          setReportSuccess(null);
+                        }}
+                        className="text-[11px] text-rose-100 hover:text-rose-50"
+                      >
+                        Close ✕
+                      </button>
+                    </div>
+
+                    {reportingEnvelope.message && (
+                      <div className="rounded-xl border border-rose-500/50 bg-rose-950/70 px-3 py-2">
+                        <p className="text-[11px] font-semibold text-rose-50 mb-1">
+                          Message being reported
+                        </p>
+                        <p className="text-[12px] text-rose-50 whitespace-pre-wrap">
+                          {reportingEnvelope.message}
+                        </p>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleSubmitReport} className="space-y-3">
+                      <div>
+                        <label className="text-[11px] font-semibold text-rose-50">
+                          What&apos;s the issue?
+                        </label>
+                        <textarea
+                          className="mt-1 w-full rounded-md border border-rose-400/70 bg-rose-950/70 px-3 py-2 text-sm text-rose-50 outline-none focus:border-rose-200"
+                          value={reportReason}
+                          onChange={(e) => setReportReason(e.target.value)}
+                          placeholder="e.g. Threatening language, harassment, hate speech…"
+                          rows={3}
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={reportSubmitting}
+                        className="inline-flex items-center justify-center rounded-full bg-rose-500 px-4 py-2 text-xs font-semibold text-rose-950 shadow-md shadow-rose-500/30 hover:bg-rose-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {reportSubmitting
+                          ? "Submitting report…"
+                          : "Submit report"}
+                      </button>
+
+                      {reportSuccess && (
+                        <p className="text-[11px] text-rose-100">
+                          {reportSuccess}
+                        </p>
+                      )}
+                    </form>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        )}
       </div>
     </main>
   );

@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Query } from "appwrite";
 import { account, databases } from "@/lib/appwriteClient";
 
@@ -26,6 +27,7 @@ type ListingSummary = {
   status: string;
   bidsCount: number;
   category?: string;
+  winnerBidId?: string | null; // ✅ chosen sealed bid, if any
 };
 
 type BidSummary = {
@@ -34,6 +36,7 @@ type BidSummary = {
   listingTitle: string;
   amount: number;
   createdAt: string;
+  decisionStatus?: string; // ✅ pending / accepted / rejected
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -72,6 +75,8 @@ function timeStatus(endsAt: string) {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
+
   const [user, setUser] = useState<SimpleUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
@@ -87,12 +92,14 @@ export default function DashboardPage() {
     let cancelled = false;
 
     async function loadDashboard() {
-      try {
-        setLoadingUser(true);
-        setListingsError(null);
-        setBidsError(null);
+      setLoadingUser(true);
+      setListingsError(null);
+      setBidsError(null);
 
-        // 1) Load account
+      try {
+        // -----------------------------
+        // 1) Load account (may throw 401 if not logged in)
+        // -----------------------------
         const me: any = await account.get();
         if (cancelled) return;
 
@@ -111,7 +118,9 @@ export default function DashboardPage() {
         setUser(simple);
         setLoadingUser(false);
 
-        // 2) Load user's own listings (latest first, limit 5)
+        // -----------------------------
+        // 2) Load user's own listings
+        // -----------------------------
         setLoadingListings(true);
         try {
           const res = await databases.listDocuments(
@@ -133,11 +142,11 @@ export default function DashboardPage() {
               bidsCount:
                 typeof doc.bidsCount === "number" ? doc.bidsCount : 0,
               category: doc.category,
+              winnerBidId: doc.winnerBidId ?? null,
             }));
             setListings(mapped);
           }
         } catch (err: any) {
-          console.error(err);
           if (!cancelled) {
             const msg =
               err?.message ||
@@ -149,7 +158,9 @@ export default function DashboardPage() {
           if (!cancelled) setLoadingListings(false);
         }
 
-        // 3) Load user's recent bids (limit 5, most recent first)
+        // -----------------------------
+        // 3) Load user's recent bids
+        // -----------------------------
         setLoadingBids(true);
         try {
           const res = await databases.listDocuments(
@@ -169,11 +180,11 @@ export default function DashboardPage() {
               listingTitle: doc.listingTitle || "(Listing)",
               amount: doc.amount,
               createdAt: doc.$createdAt,
+              decisionStatus: doc.decisionStatus || "pending",
             }));
             setBids(mapped);
           }
         } catch (err: any) {
-          console.error(err);
           if (!cancelled) {
             const msg =
               err?.message ||
@@ -184,12 +195,23 @@ export default function DashboardPage() {
         } finally {
           if (!cancelled) setLoadingBids(false);
         }
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) {
+      } catch (err: any) {
+        // -----------------------------
+        // account.get() failed
+        // -----------------------------
+        if (cancelled) return;
+
+        // If it's just "guest user, no account scope", treat as normal logged-out state
+        if (err?.code === 401 || err?.type === "user_unauthorized") {
           setUser(null);
           setLoadingUser(false);
+          return;
         }
+
+        // Anything else is a real error
+        console.error("Unexpected dashboard error:", err);
+        setUser(null);
+        setLoadingUser(false);
       }
     }
 
@@ -242,7 +264,7 @@ export default function DashboardPage() {
   }
 
   if (!user) {
-    // just in case
+    // Just in case
     return null;
   }
 
@@ -402,6 +424,10 @@ export default function DashboardPage() {
                   (l.category as keyof typeof CATEGORY_LABELS) || "other";
                 const categoryLabel = CATEGORY_LABELS[categoryKey] || "Other";
 
+                const hasWinner = Boolean(l.winnerBidId);
+                const canDecide =
+                  t.ended && bidsCount > 0 && !hasWinner;
+
                 return (
                   <Link
                     key={l.$id}
@@ -417,12 +443,44 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
-                      <p>
-                        Status:{" "}
-                        <span className="font-semibold text-slate-200">
-                          {l.status === "active" ? "Active" : "Ended"}
-                        </span>
-                      </p>
+                      <div className="space-y-1">
+                        <p>
+                          Status:{" "}
+                          <span className="font-semibold text-slate-200">
+                            {l.status === "active" ? "Active" : "Ended"}
+                          </span>
+                          {t.ended && (
+                            <span className="ml-1 text-[10px] text-slate-400">
+                              •{" "}
+                              {hasWinner
+                                ? "Winner chosen"
+                                : bidsCount > 0
+                                ? "Awaiting your decision"
+                                : "No envelopes"}
+                            </span>
+                          )}
+                        </p>
+
+                        {canDecide && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              router.push(`/dashboard/listings/${l.$id}`);
+                            }}
+                            className="mt-1 inline-flex items-center rounded-full border border-emerald-400 px-3 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/10"
+                          >
+                            Review sealed bids
+                          </button>
+                        )}
+
+                        {t.ended && hasWinner && (
+                          <p className="mt-1 text-[10px] text-emerald-300">
+                            Deal in progress – you&apos;ve accepted a buyer.
+                          </p>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1">
                         <span className="font-semibold text-emerald-300">
                           {bidsCount} envelope{bidsCount === 1 ? "" : "s"}
@@ -449,8 +507,11 @@ export default function DashboardPage() {
 
           {endedListings.length > 0 && (
             <p className="text-[11px] text-slate-500">
-              Ended listings will later get a dedicated view where you can open
-              envelopes, pick a buyer, or mark as no sale.
+              Ended listings with envelopes can be opened on the{" "}
+              <span className="font-semibold text-emerald-300">
+                &quot;Review sealed bids&quot;
+              </span>{" "}
+              screen where you pick a buyer or mark as no sale.
             </p>
           )}
         </section>
@@ -486,36 +547,53 @@ export default function DashboardPage() {
 
           {bids.length > 0 && (
             <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-xs text-slate-300">
-              {bids.map((b) => (
-                <div
-                  key={b.$id}
-                  className="flex items-center justify-between gap-3 border-b border-slate-800/70 pb-2 last:border-b-0 last:pb-0"
-                >
-                  <div className="space-y-1">
-                    <Link
-                      href={`/listings/${b.listingId}`}
-                      className="font-semibold text-slate-50 hover:text-emerald-300"
-                    >
-                      {b.listingTitle}
-                    </Link>
-                    <p className="text-[11px] text-slate-400">
-                      Your sealed bid:{" "}
-                      <span className="font-semibold text-emerald-300">
-                        £{b.amount.toLocaleString("en-GB")}
-                      </span>
-                    </p>
+              {bids.map((b) => {
+                const statusRaw = b.decisionStatus || "pending";
+                let statusLabel = "Awaiting seller decision";
+                let statusClass = "text-amber-300";
+
+                if (statusRaw === "accepted") {
+                  statusLabel = "Winner – offer accepted";
+                  statusClass = "text-emerald-300";
+                } else if (statusRaw === "rejected") {
+                  statusLabel = "Not selected";
+                  statusClass = "text-slate-400";
+                }
+
+                return (
+                  <div
+                    key={b.$id}
+                    className="flex items-center justify-between gap-3 border-b border-slate-800/70 pb-2 last:border-b-0 last:pb-0"
+                  >
+                    <div className="space-y-1">
+                      <Link
+                        href={`/listings/${b.listingId}`}
+                        className="font-semibold text-slate-50 hover:text-emerald-300"
+                      >
+                        {b.listingTitle}
+                      </Link>
+                      <p className="text-[11px] text-slate-400">
+                        Your sealed bid:{" "}
+                        <span className="font-semibold text-emerald-300">
+                          £{b.amount.toLocaleString("en-GB")}
+                        </span>
+                      </p>
+                      <p className={`text-[11px] mt-1 ${statusClass}`}>
+                        {statusLabel}
+                      </p>
+                    </div>
+                    <div className="text-right text-[10px] text-slate-500">
+                      <p>
+                        Placed:{" "}
+                        {new Date(b.createdAt).toLocaleString("en-GB", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}
+                      </p>
+                    </div>
                   </div>
-                  <div className="text-right text-[10px] text-slate-500">
-                    <p>
-                      Placed:{" "}
-                      {new Date(b.createdAt).toLocaleString("en-GB", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
-                    </p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
