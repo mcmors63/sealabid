@@ -1,12 +1,12 @@
 // app/layout.tsx
-import type { Metadata } from "next";
 import "./globals.css";
+import type { Metadata } from "next";
 import Navbar from "@/components/Navbar";
+import SiteFooter from "@/components/SiteFooter";
 
 export const metadata: Metadata = {
-  title: "Sealabid – Buying is subjective",
-  description:
-    "Sealabid is a sealed-bid marketplace where sellers choose buyers based on price and profile – not just who clicked fastest.",
+  title: "Sealabid",
+  description: "Sealed-bid marketplace – buying is subjective.",
 };
 
 export default function RootLayout({
@@ -17,11 +17,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-slate-950 text-slate-50">
-        {/* This will appear on EVERY page */}
         <Navbar />
-
-        {/* Page content */}
         {children}
+        <SiteFooter />
       </body>
     </html>
   );

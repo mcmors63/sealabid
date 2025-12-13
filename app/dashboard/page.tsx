@@ -11,6 +11,9 @@ const DB_ID = "sealabid_main_db";
 const LISTINGS_COLLECTION_ID = "listings";
 const BIDS_COLLECTION_ID = "bids";
 
+// Admin email from env
+const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
+
 type SimpleUser = {
   id: string;
   name: string;
@@ -27,7 +30,7 @@ type ListingSummary = {
   status: string;
   bidsCount: number;
   category?: string;
-  winnerBidId?: string | null; // ✅ chosen sealed bid, if any
+  winnerBidId?: string | null; // chosen sealed bid, if any
 };
 
 type BidSummary = {
@@ -36,7 +39,7 @@ type BidSummary = {
   listingTitle: string;
   amount: number;
   createdAt: string;
-  decisionStatus?: string; // ✅ pending / accepted / rejected
+  decisionStatus?: string; // pending / accepted / rejected
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -97,9 +100,7 @@ export default function DashboardPage() {
       setBidsError(null);
 
       try {
-        // -----------------------------
-        // 1) Load account (may throw 401 if not logged in)
-        // -----------------------------
+        // 1) Load account
         const me: any = await account.get();
         if (cancelled) return;
 
@@ -118,9 +119,7 @@ export default function DashboardPage() {
         setUser(simple);
         setLoadingUser(false);
 
-        // -----------------------------
-        // 2) Load user's own listings
-        // -----------------------------
+        // 2) Load user's listings
         setLoadingListings(true);
         try {
           const res = await databases.listDocuments(
@@ -158,9 +157,7 @@ export default function DashboardPage() {
           if (!cancelled) setLoadingListings(false);
         }
 
-        // -----------------------------
         // 3) Load user's recent bids
-        // -----------------------------
         setLoadingBids(true);
         try {
           const res = await databases.listDocuments(
@@ -196,19 +193,15 @@ export default function DashboardPage() {
           if (!cancelled) setLoadingBids(false);
         }
       } catch (err: any) {
-        // -----------------------------
         // account.get() failed
-        // -----------------------------
         if (cancelled) return;
 
-        // If it's just "guest user, no account scope", treat as normal logged-out state
         if (err?.code === 401 || err?.type === "user_unauthorized") {
           setUser(null);
           setLoadingUser(false);
           return;
         }
 
-        // Anything else is a real error
         console.error("Unexpected dashboard error:", err);
         setUser(null);
         setLoadingUser(false);
@@ -221,9 +214,7 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // -----------------------------
   // Not logged in
-  // -----------------------------
   if (!loadingUser && !user) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -264,9 +255,14 @@ export default function DashboardPage() {
   }
 
   if (!user) {
-    // Just in case
     return null;
   }
+
+  // ✅ Is this the admin account?
+  const isAdminUser =
+    !!ADMIN_EMAIL &&
+    !!user.email &&
+    user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   const activeListings = listings.filter((l) => l.status === "active");
   const endedListings = listings.filter((l) => l.status !== "active");
@@ -281,11 +277,12 @@ export default function DashboardPage() {
               Sealabid
             </p>
             <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">
-              Your dashboard
+              {isAdminUser ? "Admin dashboard" : "Your dashboard"}
             </h1>
             <p className="mt-2 text-sm text-slate-300">
-              A quick overview of your profile, items you&apos;ve listed, and
-              where you&apos;ve placed sealed bids.
+              {isAdminUser
+                ? "Admin view of your account plus a quick overview of items you’ve listed and where you’ve placed sealed bids."
+                : "A quick overview of your profile, items you’ve listed, and where you’ve placed sealed bids."}
             </p>
           </div>
           <Link
@@ -337,6 +334,14 @@ export default function DashboardPage() {
               >
                 Edit profile details
               </Link>
+              {isAdminUser && (
+                <Link
+                  href="/admin"
+                  className="inline-flex rounded-full border border-emerald-500/70 px-3 py-1.5 font-semibold text-emerald-200 hover:bg-emerald-500/10"
+                >
+                  Go to full admin area
+                </Link>
+              )}
             </div>
           </div>
 
@@ -370,10 +375,19 @@ export default function DashboardPage() {
                   Browse current listings
                 </Link>
               </li>
+              {isAdminUser && (
+                <li>
+                  <Link
+                    href="/admin/deals"
+                    className="text-emerald-300 underline underline-offset-2 hover:text-emerald-200"
+                  >
+                    Admin: deals &amp; winners overview
+                  </Link>
+                </li>
+              )}
             </ul>
             <p className="mt-3 text-[11px] text-slate-500">
-              Later we&apos;ll add payment methods, feedback, and more tools
-              here.
+              Later we&apos;ll add payment methods, feedback, and more tools here.
             </p>
           </div>
         </section>

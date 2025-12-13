@@ -1,7 +1,7 @@
 // app/sell/page.tsx
 "use client";
 
-import { useEffect, useState, FormEvent, ChangeEvent } from "react";
+import { FormEvent, useEffect, useState, ChangeEvent } from "react";
 import Link from "next/link";
 import { ID, Permission, Role } from "appwrite";
 import { account, databases, storage } from "@/lib/appwriteClient";
@@ -62,8 +62,6 @@ export default function SellPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [createdListingId, setCreatedListingId] = useState<string | null>(null);
-  const [createdReference, setCreatedReference] = useState<string | null>(null);
 
   // Check logged-in user + verification
   useEffect(() => {
@@ -111,8 +109,6 @@ export default function SellPage() {
     e.preventDefault();
     setError(null);
     setSuccessMessage(null);
-    setCreatedListingId(null);
-    setCreatedReference(null);
 
     if (!userId) {
       setError("You must be logged in to create a listing.");
@@ -221,11 +217,9 @@ export default function SellPage() {
         );
       }
 
-      // Success: clear the form and show a clean success screen
-      setSuccessMessage("Your listing has been created.");
-      setCreatedListingId(listingId);
-      setCreatedReference(reference);
-
+      setSuccessMessage(
+        "Your listing has been created. The £10 listing fee will apply when we wire up payments."
+      );
       setTitle("");
       setDescription("");
       setCategory("");
@@ -271,21 +265,6 @@ export default function SellPage() {
       // Hard cap at 6 images
       return combined.slice(0, 6);
     });
-  }
-
-  function resetForAnotherListing() {
-    setSuccessMessage(null);
-    setCreatedListingId(null);
-    setCreatedReference(null);
-    setError(null);
-
-    setTitle("");
-    setDescription("");
-    setCategory("");
-    setStartingPrice("");
-    setDurationDays(7);
-    setConfirmRules(false);
-    setFiles([]);
   }
 
   if (checkingUser) {
@@ -341,224 +320,223 @@ export default function SellPage() {
           </Link>
         </div>
 
-        {/* SUCCESS SCREEN – clears the form view */}
-        {successMessage && createdListingId ? (
-          <section className="space-y-4 rounded-3xl border border-emerald-500/60 bg-emerald-950/40 p-5 text-sm text-emerald-50">
-            <p className="text-sm font-semibold">
-              {successMessage}
+        <p className="text-sm text-slate-300">
+          Create a listing that buyers can place sealed bids on. Add clear photos,
+          choose a category and set an optional private &quot;make me happy&quot;
+          target.
+        </p>
+
+        {/* FEES & COMMISSION SECTION */}
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/70 p-4 text-xs text-slate-200 space-y-2">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+            Fees & commission
+          </h2>
+          <p>
+            <span className="font-semibold text-emerald-300">Listing fee:</span>{" "}
+            £10.00, charged when you publish your listing.
+          </p>
+          <p>
+            If you decide to accept an offer, that £10 is{" "}
+            <span className="font-semibold">credited back</span> in your final
+            settlement – it comes off the fees you pay. If you don&apos;t accept
+            any offer (no sale), the £10 listing fee is not refunded.
+          </p>
+          <div className="mt-1">
+            <p className="font-semibold text-[11px] text-slate-300">
+              Commission bands (taken from the final agreed price):
             </p>
-            {createdReference && (
-              <p className="text-xs text-emerald-100">
-                Reference:{" "}
-                <span className="font-mono font-semibold">
-                  {createdReference}
-                </span>
+            <ul className="mt-1 space-y-1">
+              <li>• Up to £4,999 – 10%</li>
+              <li>• £5,000 – £9,999 – 8%</li>
+              <li>• £10,000 – £24,999 – 6%</li>
+              <li>• £25,000+ – 5%</li>
+            </ul>
+          </div>
+          <p className="text-[11px] text-slate-400">
+            In short: if you accept an offer, you effectively just pay the
+            commission on the sale price – the £10 listing fee is credited back
+            against those fees when we do the payout.
+          </p>
+        </section>
+
+        {emailNotVerified && (
+          <div className="rounded-md border border-amber-500/60 bg-amber-950/40 px-3 py-2 text-xs text-amber-100">
+            Your email address is not verified. You can fill this form out, but you
+            won&apos;t be able to publish the listing until you verify.{" "}
+            <Link
+              href="/verify-email"
+              className="underline underline-offset-2 font-semibold"
+            >
+              Verify your email.
+            </Link>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {error && (
+            <div className="rounded-md border border-red-500/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+              {error}
+            </div>
+          )}
+
+          {successMessage && (
+            <div className="rounded-md border border-emerald-500/60 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-200">
+              {successMessage}
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-200">
+              Listing title
+            </label>
+            <input
+              type="text"
+              className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Original oil painting, vintage watch, limited edition print"
+            />
+          </div>
+
+          {/* Category dropdown */}
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-200">Category</label>
+            <select
+              className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
+              value={category || ""}
+              onChange={(e) => setCategory((e.target.value as Category) || "")}
+            >
+              <option value="">Select a category…</option>
+              {CATEGORY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-slate-400">
+              Category helps buyers find your listing and powers search and filters.
+            </p>
+          </div>
+
+          {/* Description */}
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-200">
+              Description
+            </label>
+            <textarea
+              className="min-h-[120px] w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Explain what it is, condition, provenance, anything a serious buyer would want to know."
+            />
+          </div>
+
+          {/* Photos */}
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-200">
+              Photos of the item
+            </label>
+            <input
+              type="file"
+              multiple
+              accept="image/*"
+              onChange={handleFileChange}
+              className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-100 hover:file:bg-slate-700"
+            />
+            <p className="text-[11px] text-slate-400">
+              You can upload up to 6 images. Clear, honest photos make it much
+              easier for buyers to value your item.
+            </p>
+            {files.length > 0 && (
+              <p className="text-[11px] text-emerald-300">
+                {files.length} image{files.length === 1 ? "" : "s"} selected.
               </p>
             )}
-            <p className="text-xs text-emerald-100">
-              Your listing is now live with a sealed-bid window based on the duration you chose.
-            </p>
-            <div className="flex flex-wrap gap-2 pt-1">
-              <Link
-                href={`/listings/${createdListingId}`}
-                className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-md shadow-emerald-500/30 hover:bg-emerald-400"
-              >
-                View my listing
-              </Link>
-              <Link
-                href="/listings"
-                className="inline-flex items-center justify-center rounded-full border border-emerald-400 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10"
-              >
-                See all current listings
-              </Link>
-              <button
-                type="button"
-                onClick={resetForAnotherListing}
-                className="inline-flex items-center justify-center rounded-full border border-slate-600 px-4 py-2 text-xs font-semibold text-slate-100 hover:border-emerald-400 hover:text-emerald-300"
-              >
-                Create another listing
-              </button>
+          </div>
+
+          {/* Make me happy target */}
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-200">
+              My “make me happy” target (private)
+            </label>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-300">£</span>
+              <input
+                type="text"
+                className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
+                value={startingPrice}
+                onChange={(e) => setStartingPrice(e.target.value)}
+                placeholder="Whole pounds only, or leave blank"
+              />
             </div>
-          </section>
-        ) : (
-          <>
-            <p className="text-sm text-slate-300">
-              Create a listing that buyers can place sealed bids on. Add clear photos,
-              choose a category and set an optional private &quot;make me happy&quot;
-              target.
+            <p className="text-[11px] text-slate-400">
+              This is your private “make me happy” number. Buyers never see it. It
+              just helps you decide later whether a sealed offer feels good enough to
+              accept.
             </p>
+          </div>
 
-            {emailNotVerified && (
-              <div className="rounded-md border border-amber-500/60 bg-amber-950/40 px-3 py-2 text-xs text-amber-100">
-                Your email address is not verified. You can fill this form out, but you
-                won&apos;t be able to publish the listing until you verify.{" "}
-                <Link
-                  href="/verify-email"
-                  className="underline underline-offset-2 font-semibold"
+          {/* Duration */}
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-200">
+              How long should the listing run?
+            </label>
+            <div className="flex gap-2 text-xs">
+              {[7, 14, 21].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDurationDays(d as DurationOption)}
+                  className={`flex-1 rounded-full border px-3 py-1.5 font-medium transition ${
+                    durationDays === d
+                      ? "border-emerald-400 bg-emerald-500/10 text-emerald-200"
+                      : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                  }`}
                 >
-                  Verify your email.
-                </Link>
-              </div>
-            )}
+                  {d} days
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-400">
+              When you create the listing, we calculate an end time based on this
+              choice. At the end, envelopes can be opened and you&apos;ll have 2
+              hours to decide.
+            </p>
+          </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {error && (
-                <div className="rounded-md border border-red-500/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
-                  {error}
-                </div>
-              )}
+          {/* Rules confirm */}
+          <div className="flex items-start gap-2">
+            <input
+              id="confirmRules"
+              type="checkbox"
+              className="mt-[3px] h-4 w-4 rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
+              checked={confirmRules}
+              onChange={(e) => setConfirmRules(e.target.checked)}
+            />
+            <label
+              htmlFor="confirmRules"
+              className="text-xs text-slate-300 leading-snug"
+            >
+              I understand that buyers place sealed bids, I will not see amounts
+              until the end of the listing, and when it ends I have up to 2 hours to
+              choose a buyer (or no sale) based on both price and profile.
+            </label>
+          </div>
 
-              {/* Title */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-200">
-                  Listing title
-                </label>
-                <input
-                  type="text"
-                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Original oil painting, vintage watch, limited edition print"
-                />
-              </div>
+          <button
+            type="submit"
+            disabled={submitting || !userVerified}
+            className="mt-2 inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 shadow-md shadow-emerald-500/30 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {submitting ? "Creating listing..." : "Create listing (£10 listing fee)"}
+          </button>
 
-              {/* Category dropdown */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-200">
-                  Category
-                </label>
-                <select
-                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
-                  value={category || ""}
-                  onChange={(e) => setCategory((e.target.value as Category) || "")}
-                >
-                  <option value="">Select a category…</option>
-                  {CATEGORY_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-slate-400">
-                  Category helps buyers find your listing and powers search and filters.
-                </p>
-              </div>
-
-              {/* Description */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-200">
-                  Description
-                </label>
-                <textarea
-                  className="min-h-[120px] w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Explain what it is, condition, provenance, anything a serious buyer would want to know."
-                />
-              </div>
-
-              {/* Photos */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-200">
-                  Photos of the item
-                </label>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  onChange={handleFileChange}
-                  className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-100 hover:file:bg-slate-700"
-                />
-                <p className="text-[11px] text-slate-400">
-                  You can upload up to 6 images. Clear, honest photos make it much
-                  easier for buyers to value your item.
-                </p>
-                {files.length > 0 && (
-                  <p className="text-[11px] text-emerald-300">
-                    {files.length} image{files.length === 1 ? "" : "s"} selected.
-                  </p>
-                )}
-              </div>
-
-              {/* Make me happy target */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-200">
-                  My “make me happy” target (private)
-                </label>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-slate-300">£</span>
-                  <input
-                    type="text"
-                    className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-400"
-                    value={startingPrice}
-                    onChange={(e) => setStartingPrice(e.target.value)}
-                    placeholder="Whole pounds only, or leave blank"
-                  />
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  This is your private “make me happy” number. Buyers never see it. It
-                  just helps you decide later whether a sealed offer feels good enough
-                  to accept.
-                </p>
-              </div>
-
-              {/* Duration */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-200">
-                  How long should the listing run?
-                </label>
-                <div className="flex gap-2 text-xs">
-                  {[7, 14, 21].map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setDurationDays(d as DurationOption)}
-                      className={`flex-1 rounded-full border px-3 py-1.5 font-medium transition ${
-                        durationDays === d
-                          ? "border-emerald-400 bg-emerald-500/10 text-emerald-200"
-                          : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
-                      }`}
-                    >
-                      {d} days
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  When you create the listing, we calculate an end time based on this
-                  choice. At the end, envelopes can be opened and you&apos;ll have 2
-                  hours to decide.
-                </p>
-              </div>
-
-              {/* Rules confirm */}
-              <div className="flex items-start gap-2">
-                <input
-                  id="confirmRules"
-                  type="checkbox"
-                  className="mt-[3px] h-4 w-4 rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
-                  checked={confirmRules}
-                  onChange={(e) => setConfirmRules(e.target.checked)}
-                />
-                <label
-                  htmlFor="confirmRules"
-                  className="text-xs text-slate-300 leading-snug"
-                >
-                  I understand that buyers place sealed bids, I will not see amounts
-                  until the end of the listing, and when it ends I have up to 2 hours
-                  to choose a buyer (or no sale) based on both price and profile.
-                </label>
-              </div>
-
-              <button
-                type="submit"
-                disabled={submitting || !userVerified}
-                className="mt-2 inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 shadow-md shadow-emerald-500/30 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {submitting ? "Creating listing..." : "Create listing"}
-              </button>
-            </form>
-          </>
-        )}
+          <p className="text-[11px] text-slate-500">
+            When payments are connected, we&apos;ll charge a £10 listing fee when
+            you publish. If you accept an offer, that £10 is credited back in your
+            final settlement and you just pay the commission band shown above.
+          </p>
+        </form>
       </div>
     </main>
   );

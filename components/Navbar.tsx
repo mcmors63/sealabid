@@ -6,18 +6,21 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { account } from "@/lib/appwriteClient";
 
+// Admin is decided by email in env
+const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
+
 const navLinks = [
   { href: "/", label: "Home" },
   { href: "/listings", label: "Browse" },
   { href: "/sell", label: "Sell an item" },
+  { href: "/fees", label: "Fees" },
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/terms", label: "Terms" },
-  { href: "/privacy", label: "Privacy" },
 ];
 
 type SimpleUser = {
   name?: string;
   email?: string;
+  isAdmin?: boolean;
 };
 
 export default function Navbar() {
@@ -33,9 +36,19 @@ export default function Navbar() {
     async function loadUser() {
       try {
         const res = await account.get();
-        if (!cancelled) {
-          setUser({ name: res.name, email: res.email });
-        }
+        if (cancelled) return;
+
+        // ✅ Force this to be a strict boolean
+        const isAdminUser: boolean =
+          !!ADMIN_EMAIL &&
+          !!res.email &&
+          res.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+        setUser({
+          name: res.name,
+          email: res.email,
+          isAdmin: isAdminUser,
+        });
       } catch {
         if (!cancelled) {
           setUser(null);
@@ -97,6 +110,20 @@ export default function Navbar() {
                 </Link>
               );
             })}
+
+            {/* Admin link only for admin user */}
+            {user?.isAdmin && (
+              <Link
+                href="/admin"
+                className={`transition hover:text-emerald-300 ${
+                  pathname.startsWith("/admin")
+                    ? "text-emerald-400"
+                    : "text-slate-300"
+                }`}
+              >
+                Admin
+              </Link>
+            )}
           </div>
 
           {/* Auth area */}

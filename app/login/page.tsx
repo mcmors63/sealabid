@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { account } from "@/lib/appwriteClient";
 
+const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -27,17 +29,23 @@ export default function LoginPage() {
     setSubmitting(true);
 
     try {
-      // ✅ Proper Appwrite web SDK call – two parameters
-      await account.createEmailPasswordSession(email, password);
+      await account.createEmailPasswordSession({
+        email,
+        password,
+      });
 
-      // Optional: sanity check (can remove later if you want)
-      // const me = await account.get();
-      // console.log("Logged in as:", me);
-
-      // ✅ Go straight to dashboard so we can see session in action
-      router.push("/dashboard");
+      // If this email is the admin email → send to /admin
+      if (
+        ADMIN_EMAIL &&
+        email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
+      ) {
+        router.push("/admin");
+      } else {
+        // Normal users go to their dashboard
+        router.push("/dashboard");
+      }
     } catch (err: any) {
-      console.error("Login error:", err);
+      console.error(err);
       const message =
         err?.message ||
         err?.response?.message ||
