@@ -1,3 +1,4 @@
+// components/EnvelopePanel.tsx
 "use client";
 
 import { useEffect, useState, FormEvent } from "react";
@@ -145,7 +146,8 @@ export default function EnvelopePanel({ listingId, deadline }: EnvelopePanelProp
       setLoadingEnvelope(true);
       setError(null);
       try {
-        const res = await databases.listDocuments<EnvelopeDoc>(
+        // ⬇ REMOVE GENERIC, CAST RESULT
+        const res: any = await databases.listDocuments(
           ENVELOPES_DB_ID,
           ENVELOPES_COLLECTION_ID,
           [
@@ -159,7 +161,7 @@ export default function EnvelopePanel({ listingId, deadline }: EnvelopePanelProp
         if (cancelled) return;
 
         if (res.documents.length > 0) {
-          const doc = res.documents[0] as any as EnvelopeDoc;
+          const doc = res.documents[0] as EnvelopeDoc;
           setEnvelope(doc);
           setAmount(doc.amount?.toString() ?? "");
           setMessage(doc.message ?? "");
@@ -219,7 +221,7 @@ export default function EnvelopePanel({ listingId, deadline }: EnvelopePanelProp
     try {
       if (envelope && envelope.status === "submitted") {
         // Update existing envelope – stays "submitted"
-        const updated = await databases.updateDocument<EnvelopeDoc>(
+        const updated: any = await databases.updateDocument(
           ENVELOPES_DB_ID,
           ENVELOPES_COLLECTION_ID,
           envelope.$id,
@@ -230,12 +232,12 @@ export default function EnvelopePanel({ listingId, deadline }: EnvelopePanelProp
           }
         );
 
-        const doc = updated as any as EnvelopeDoc;
+        const doc = updated as EnvelopeDoc;
         setEnvelope(doc);
         setSuccess("Envelope updated.");
       } else if (!envelope) {
         // Create new envelope
-        const created = await databases.createDocument<EnvelopeDoc>(
+        const created: any = await databases.createDocument(
           ENVELOPES_DB_ID,
           ENVELOPES_COLLECTION_ID,
           ID.unique(),
@@ -248,11 +250,11 @@ export default function EnvelopePanel({ listingId, deadline }: EnvelopePanelProp
           }
         );
 
-        const doc = created as any as EnvelopeDoc;
+        const doc = created as EnvelopeDoc;
         setEnvelope(doc);
         setSuccess("Envelope submitted.");
       } else {
-        // Already winner/rejected – no edits allowed
+        // Already winner/rejected/withdrawn – no edits allowed
         setError("This envelope can no longer be changed.");
       }
     } catch (err: any) {

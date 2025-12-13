@@ -12,7 +12,7 @@ const DB_ID = "sealabid_main_db";
 const LISTINGS_COLLECTION_ID = "listings";
 const LISTING_IMAGES_BUCKET_ID = "listing_images";
 
-// Envelopes live in the same DB but own collection
+// Envelopes live in the same DB but their own collection
 const ENVELOPES_DB_ID = process.env.NEXT_PUBLIC_APPWRITE_ENVELOPES_DB_ID!;
 const ENVELOPES_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_ENVELOPES_COLLECTION_ID!;
@@ -302,12 +302,19 @@ export default function ListingDetailPage() {
       : "00d 00h 00m 00s";
 
   // -----------------------------
-  // Load envelopes for seller
+  // Load envelopes for seller (AFTER deadline only)
   // -----------------------------
   useEffect(() => {
     if (!listing || !currentUserId) return;
     if (listing.sellerId !== currentUserId) return;
 
+    // If the deadline hasn't passed yet, don't show envelopes
+    const endsMs = new Date(listing.endsAt).getTime();
+    if (!Number.isFinite(endsMs) || endsMs > Date.now()) {
+      return;
+    }
+
+    const listingIdForQuery = listing.$id; // non-null after guards
     let cancelled = false;
 
     async function loadEnvelopes() {
@@ -317,7 +324,10 @@ export default function ListingDetailPage() {
         const res: any = await databases.listDocuments(
           ENVELOPES_DB_ID,
           ENVELOPES_COLLECTION_ID,
-          [Query.equal("listingId", listing.$id), Query.orderDesc("$createdAt")]
+          [
+            Query.equal("listingId", listingIdForQuery),
+            Query.orderDesc("$createdAt"),
+          ]
         );
 
         if (cancelled) return;
@@ -342,7 +352,7 @@ export default function ListingDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [listing?.$id, listing?.sellerId, currentUserId]);
+  }, [listing?.$id, listing?.sellerId, listing?.endsAt, currentUserId]);
 
   // -----------------------------
   // Seller chooses a winner
@@ -352,7 +362,7 @@ export default function ListingDetailPage() {
     if (listing.sellerId !== currentUserId) return;
 
     const ok = window.confirm(
-      "Confirm this buyer as your chosen winner? All other non-withdrawn envelopes will be marked as rejected."
+      "Confirm this buyer as your chosen winner? All other envelopes will be marked as rejected."
     );
     if (!ok) return;
 
@@ -368,7 +378,7 @@ export default function ListingDetailPage() {
             env.$id,
             { status: "winner" }
           );
-        } else if (env.status !== "withdrawn") {
+        } else {
           await databases.updateDocument(
             ENVELOPES_DB_ID,
             ENVELOPES_COLLECTION_ID,
@@ -384,7 +394,10 @@ export default function ListingDetailPage() {
       const res: any = await databases.listDocuments(
         ENVELOPES_DB_ID,
         ENVELOPES_COLLECTION_ID,
-        [Query.equal("listingId", listing.$id), Query.orderDesc("$createdAt")]
+        [
+          Query.equal("listingId", listing.$id),
+          Query.orderDesc("$createdAt"),
+        ]
       );
       setEnvelopes(res.documents || []);
     } catch (err: any) {
@@ -706,8 +719,8 @@ export default function ListingDetailPage() {
           {!biddingClosed && userIsSeller && (
             <p className="text-xs text-slate-400">
               You&apos;re the seller for this listing. You&apos;ll see your
-              envelopes when the listing ends – you can&apos;t bid on your own
-              item.
+              envelopes after the sealed-bid window has closed – you can&apos;t
+              bid on your own item.
             </p>
           )}
 

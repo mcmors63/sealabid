@@ -355,7 +355,8 @@ export default function ListingsPage() {
                         </p>
                       )}
 
-                      {/* 🔕 No "make me happy" target shown here anymore */}
+                      {/* IMPORTANT: we now hide the "make me happy" target from buyers */}
+                      {/* startingPrice still exists in the DB, but is private for the seller */}
                     </div>
                   </div>
                 </Link>
