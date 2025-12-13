@@ -15,7 +15,7 @@ type Listing = {
   reference: string;
   title: string;
   description: string;
-  startingPrice?: number;
+  startingPrice?: number; // still kept in type, we just don't show it publicly
   durationDays: number;
   endsAt: string;
   status: string;
@@ -354,9 +354,6 @@ export default function ListingsPage() {
                           </span>
                         </p>
                       )}
-
-                      {/* IMPORTANT: we now hide the "make me happy" target from buyers */}
-                      {/* startingPrice still exists in the DB, but is private for the seller */}
                     </div>
                   </div>
                 </Link>
